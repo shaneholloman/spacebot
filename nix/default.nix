@@ -194,16 +194,17 @@
     export -f replace_imap_proto
 
     # Find and replace imap-proto in cargo vendor directories
-    find /build -type d -name "imap-proto-*" 2>/dev/null -exec bash -c 'replace_imap_proto "$0"' {} \;
+    # Use specific version to avoid accidental matches and NIX_BUILD_TOP for robustness
+    find "''${NIX_BUILD_TOP:-/build}" -type d -name "imap-proto-0.10.2" 2>/dev/null -exec bash -c 'replace_imap_proto "$0"' {} \;
 
     # Also check cargo home
     if [ -d "$CARGO_HOME/registry/src" ]; then
-      find "$CARGO_HOME/registry/src" -type d -name "imap-proto-*" 2>/dev/null -exec bash -c 'replace_imap_proto "$0"' {} \;
+      find "$CARGO_HOME/registry/src" -type d -name "imap-proto-0.10.2" 2>/dev/null -exec bash -c 'replace_imap_proto "$0"' {} \;
     fi
 
     # Check in cargo vendor dir if set
     if [ -n "''${cargoVendorDir:-}" ] && [ -d "$cargoVendorDir" ]; then
-      find "$cargoVendorDir" -type d -name "imap-proto-*" 2>/dev/null -exec bash -c 'replace_imap_proto "$0"' {} \;
+      find "$cargoVendorDir" -type d -name "imap-proto-0.10.2" 2>/dev/null -exec bash -c 'replace_imap_proto "$0"' {} \;
     fi
   '';
 
