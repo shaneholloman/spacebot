@@ -1038,7 +1038,7 @@ fn build_embed(card: &crate::Card) -> CreateEmbed {
         embed = embed.url(url);
     }
     if let Some(footer) = &card.footer {
-        embed = embed.footer(CreateEmbedFooter::new(footer));
+        embed = embed.footer(CreateEmbedFooter::new(footer.text.clone()));
     }
 
     for (i, field) in card.fields.iter().enumerate() {
