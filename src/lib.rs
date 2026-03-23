@@ -764,7 +764,6 @@ pub struct Card {
     #[serde(default)]
     pub fields: Vec<CardField>,
     #[serde(default, deserialize_with = "deserialize_card_footer")]
-    #[schemars(with = "Option<String>")]
     pub footer: Option<CardFooter>,
 }
 
@@ -838,7 +837,7 @@ where
             while let Some(key) = map.next_key::<String>()? {
                 match key.as_str() {
                     "text" => text = Some(map.next_value::<String>()?),
-                    "icon_url" => icon_url = Some(map.next_value::<String>()?),
+                    "icon_url" => icon_url = map.next_value::<Option<String>>()?,
                     _ => {
                         // Skip unknown fields
                         let _: serde::de::IgnoredAny = map.next_value()?;
@@ -1008,6 +1007,17 @@ mod tests {
         let card: Card = serde_json::from_str(json).expect("should parse footer with text only");
         assert!(card.footer.is_some());
         assert_eq!(card.footer.as_ref().unwrap().text, "Week of March 23, 2026");
+        assert!(card.footer.as_ref().unwrap().icon_url.is_none());
+    }
+
+    #[test]
+    fn card_footer_deserializes_from_object_with_null_icon_url() {
+        // Regression test: icon_url: null should deserialize without error
+        let json = r#"{"title": "Test", "footer": {"text": "x", "icon_url": null}}"#;
+        let card: Card =
+            serde_json::from_str(json).expect("should parse footer with null icon_url");
+        assert!(card.footer.is_some());
+        assert_eq!(card.footer.as_ref().unwrap().text, "x");
         assert!(card.footer.as_ref().unwrap().icon_url.is_none());
     }
 
