@@ -1502,14 +1502,14 @@ pub fn spawn_cortex_loop(deps: AgentDeps, logger: CortexLogger) -> tokio::task::
         let tool_use_enforcement = deps.runtime_config.tool_use_enforcement.load();
         let system_prompt = match prompt_engine.render_static("cortex") {
             Ok(prompt) => match prompt_engine.maybe_append_tool_use_enforcement(
-                prompt,
+                prompt.clone(),
                 tool_use_enforcement.as_ref(),
                 &model_name,
             ) {
                 Ok(prompt) => prompt,
                 Err(error) => {
                     tracing::warn!(%error, "failed to append tool-use enforcement, using base cortex prompt");
-                    prompt_engine.render_static("cortex").unwrap_or_default()
+                    prompt
                 }
             },
             Err(error) => {

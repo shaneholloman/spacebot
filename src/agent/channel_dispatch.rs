@@ -516,13 +516,6 @@ async fn spawn_worker_inner(
             browser_config.persist_session,
             worker_status_text,
         )
-        .and_then(|prompt| {
-            prompt_engine.maybe_append_tool_use_enforcement(
-                prompt,
-                tool_use_enforcement.as_ref(),
-                &model_name,
-            )
-        })
         .map_err(|e| AgentError::Other(anyhow::anyhow!("{e}")))?;
     let skills = rc.skills.load();
     let brave_search_key = (**rc.brave_search_key.load()).clone();
@@ -530,7 +523,7 @@ async fn spawn_worker_inner(
     // Append skills listing to worker system prompt. Suggested skills are
     // flagged so the worker knows the channel's intent, but it can read any
     // skill it decides is relevant via the read_skill tool.
-    let mut system_prompt = match skills.render_worker_skills(suggested_skills, &prompt_engine) {
+    let system_prompt = match skills.render_worker_skills(suggested_skills, &prompt_engine) {
         Ok(skills_prompt) if !skills_prompt.is_empty() => {
             format!("{worker_system_prompt}\n\n{skills_prompt}")
         }
@@ -540,6 +533,12 @@ async fn spawn_worker_inner(
             worker_system_prompt
         }
     };
+
+    // Append tool-use enforcement after skills so it's the last instruction
+    // in the preamble ("last instruction wins").
+    let mut system_prompt = prompt_engine
+        .maybe_append_tool_use_enforcement(system_prompt, tool_use_enforcement.as_ref(), &model_name)
+        .map_err(|e| AgentError::Other(anyhow::anyhow!("{e}")))?;
 
     // Inject memory context based on worker_context settings
     if worker_context.memory.ambient_enabled() {
@@ -1171,6 +1170,9 @@ pub async fn resume_idle_worker_into_state(
                 None => Vec::new(),
             };
             let browser_config = (**rc.browser_config.load()).clone();
+            let routing = rc.routing.load();
+            let model_name = routing.resolve(ProcessType::Worker, None).to_string();
+            let tool_use_enforcement = rc.tool_use_enforcement.load();
             let system_prompt = prompt_engine
                 .render_worker_prompt(
                     &rc.instance_dir.display().to_string(),
@@ -1183,6 +1185,13 @@ pub async fn resume_idle_worker_into_state(
                     browser_config.persist_session,
                     worker_status_text,
                 )
+                .and_then(|prompt| {
+                    prompt_engine.maybe_append_tool_use_enforcement(
+                        prompt,
+                        tool_use_enforcement.as_ref(),
+                        &model_name,
+                    )
+                })
                 .map_err(|error| format!("failed to render worker prompt: {error}"))?;
             let brave_search_key = (**rc.brave_search_key.load()).clone();
 

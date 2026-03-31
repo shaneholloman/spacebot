@@ -530,11 +530,9 @@ async fn process_chunk(
     classify_chunk_prompt_result(result, filename, chunk_number, total_chunks)?;
 
     if !contract_state.has_terminal_outcome() {
-        tracing::warn!(
-            file = %filename,
-            chunk = %format!("{chunk_number}/{total_chunks}"),
-            "ingestion chunk completed without memory_persistence_complete signal"
-        );
+        return Err(anyhow::anyhow!(
+            "ingestion chunk {chunk_number}/{total_chunks} for {filename} completed without memory_persistence_complete signal"
+        ));
     }
 
     Ok(())

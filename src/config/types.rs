@@ -258,6 +258,11 @@ impl<'de> serde::Deserialize<'de> for ToolUseEnforcement {
                     &"one of 'auto', 'true', 'false', 'always', 'never'",
                 )),
             },
+            toml::Value::Boolean(enabled) => Ok(if enabled {
+                Self::Always
+            } else {
+                Self::Never
+            }),
             toml::Value::Array(arr) => {
                 let patterns: Vec<String> = arr
                     .into_iter()
