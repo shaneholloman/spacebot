@@ -221,6 +221,12 @@ impl Tool for SpawnWorkerTool {
                 .await
                 .map_err(|e| SpawnWorkerError(format!("{e}")))?
         } else {
+            // Read worker context settings from ChannelState
+            let worker_context = {
+                let settings = self.state.worker_context_settings.read().await;
+                settings.clone()
+            };
+
             spawn_worker_from_state(
                 &self.state,
                 &args.task,
@@ -230,6 +236,7 @@ impl Tool for SpawnWorkerTool {
                     .iter()
                     .map(String::as_str)
                     .collect::<Vec<_>>(),
+                &worker_context,
             )
             .await
             .map_err(|e| SpawnWorkerError(format!("{e}")))?
@@ -413,6 +420,11 @@ impl Tool for DetachedSpawnWorkerTool {
         };
 
         let browser_config = (**rc.browser_config.load()).clone();
+        let routing = rc.routing.load();
+        let model_name = routing
+            .resolve(crate::ProcessType::Worker, None)
+            .to_string();
+        let tool_use_enforcement = rc.tool_use_enforcement.load();
         let worker_system_prompt = prompt_engine
             .render_worker_prompt(
                 &rc.instance_dir.display().to_string(),
@@ -425,6 +437,13 @@ impl Tool for DetachedSpawnWorkerTool {
                 browser_config.persist_session,
                 worker_status_text,
             )
+            .and_then(|prompt| {
+                prompt_engine.maybe_append_tool_use_enforcement(
+                    prompt,
+                    tool_use_enforcement.as_ref(),
+                    &model_name,
+                )
+            })
             .map_err(|error| {
                 SpawnWorkerError(format!("failed to render worker prompt: {error}"))
             })?;
@@ -440,6 +459,9 @@ impl Tool for DetachedSpawnWorkerTool {
             self.screenshot_dir.clone(),
             brave_search_key,
             self.logs_dir.clone(),
+            Vec::new(), // no initial history for detached workers
+            crate::conversation::settings::WorkerMemoryMode::None,
+            None, // No model override for detached workers
         );
 
         let (worker, _input_tx) = worker;

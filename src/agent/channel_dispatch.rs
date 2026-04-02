@@ -8,9 +8,10 @@ use crate::agent::branch::{Branch, BranchExecutionConfig};
 use crate::agent::channel::ChannelState;
 use crate::agent::channel_prompt::TemporalContext;
 use crate::agent::worker::Worker;
+use crate::conversation::settings::{WorkerContextMode, WorkerHistoryMode};
 use crate::error::{AgentError, Error as SpacebotError};
 use crate::tools::{BranchToolProfile, MemoryPersistenceContractState};
-use crate::{AgentDeps, BranchId, ChannelId, ProcessEvent, WorkerId};
+use crate::{AgentDeps, BranchId, ChannelId, ProcessEvent, ProcessType, WorkerId};
 use futures::FutureExt as _;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -126,11 +127,21 @@ pub async fn spawn_branch_from_state(
     let description = description.into();
     let rc = &state.deps.runtime_config;
     let prompt_engine = rc.prompts.load();
+    let routing = rc.routing.load();
+    let model_name = routing.resolve(ProcessType::Branch, None).to_string();
+    let tool_use_enforcement = rc.tool_use_enforcement.load();
     let system_prompt = prompt_engine
         .render_branch_prompt(
             &rc.instance_dir.display().to_string(),
             &rc.workspace_dir.display().to_string(),
         )
+        .and_then(|prompt| {
+            prompt_engine.maybe_append_tool_use_enforcement(
+                prompt,
+                tool_use_enforcement.as_ref(),
+                &model_name,
+            )
+        })
         .map_err(|e| AgentError::Other(anyhow::anyhow!("{e}")))?;
 
     spawn_branch(
@@ -159,8 +170,18 @@ pub(crate) async fn spawn_memory_persistence_branch(
     let contract_state = Arc::new(MemoryPersistenceContractState::default());
 
     let prompt_engine = deps.runtime_config.prompts.load();
+    let routing = deps.runtime_config.routing.load();
+    let model_name = routing.resolve(ProcessType::Branch, None).to_string();
+    let tool_use_enforcement = deps.runtime_config.tool_use_enforcement.load();
     let system_prompt = prompt_engine
         .render_static("memory_persistence")
+        .and_then(|prompt| {
+            prompt_engine.maybe_append_tool_use_enforcement(
+                prompt,
+                tool_use_enforcement.as_ref(),
+                &model_name,
+            )
+        })
         .map_err(|e| AgentError::Other(anyhow::anyhow!("{e}")))?;
     let prompt = prompt_engine
         .render_system_memory_persistence()
@@ -283,6 +304,10 @@ async fn spawn_branch(
             max_turns: branch_max_turns,
             memory_persistence_contract,
         },
+        state
+            .model_overrides
+            .resolve_model("branch")
+            .map(String::from),
     );
 
     let branch_id = branch.id;
@@ -433,13 +458,15 @@ pub async fn spawn_worker_from_state(
     task: impl Into<String>,
     interactive: bool,
     suggested_skills: &[&str],
+    worker_context: &WorkerContextMode,
 ) -> std::result::Result<WorkerId, AgentError> {
     check_worker_limit(state).await?;
     let task = task.into();
     reserve_task_if_unique(state, &task).await?;
     ensure_dispatch_readiness(state, "worker");
 
-    let result = spawn_worker_inner(state, &task, interactive, suggested_skills).await;
+    let result =
+        spawn_worker_inner(state, &task, interactive, suggested_skills, worker_context).await;
 
     // Release the reservation regardless of success or failure.
     // On success the task is now in the status block; on failure it needs cleanup.
@@ -455,6 +482,7 @@ async fn spawn_worker_inner(
     task: &str,
     interactive: bool,
     suggested_skills: &[&str],
+    worker_context: &WorkerContextMode,
 ) -> std::result::Result<WorkerId, AgentError> {
     let rc = &state.deps.runtime_config;
     let prompt_engine = rc.prompts.load();
@@ -473,6 +501,9 @@ async fn spawn_worker_inner(
     };
 
     let browser_config = (**rc.browser_config.load()).clone();
+    let routing = rc.routing.load();
+    let model_name = routing.resolve(ProcessType::Worker, None).to_string();
+    let tool_use_enforcement = rc.tool_use_enforcement.load();
     let worker_system_prompt = prompt_engine
         .render_worker_prompt(
             &rc.instance_dir.display().to_string(),
@@ -503,6 +534,71 @@ async fn spawn_worker_inner(
         }
     };
 
+    // Append tool-use enforcement after skills so it's the last instruction
+    // in the preamble ("last instruction wins").
+    let mut system_prompt = prompt_engine
+        .maybe_append_tool_use_enforcement(
+            system_prompt,
+            tool_use_enforcement.as_ref(),
+            &model_name,
+        )
+        .map_err(|e| AgentError::Other(anyhow::anyhow!("{e}")))?;
+
+    // Inject memory context based on worker_context settings
+    if worker_context.memory.ambient_enabled() {
+        // Get knowledge synthesis and working memory
+        let knowledge_synthesis = state.deps.runtime_config.knowledge_synthesis.load();
+        let wm_config = **state.deps.runtime_config.working_memory.load();
+        let timezone = state.deps.working_memory.timezone();
+
+        if let Ok(working_memory) = crate::memory::working::render_working_memory(
+            &state.deps.working_memory,
+            state.channel_id.as_ref(),
+            &wm_config,
+            timezone,
+        )
+        .await
+        {
+            system_prompt.push_str("\n\n## Agent's Knowledge\n");
+            system_prompt.push_str(&knowledge_synthesis.to_string());
+            if !working_memory.is_empty() {
+                system_prompt.push_str("\n\n## Recent Activity\n");
+                system_prompt.push_str(&working_memory);
+            }
+        }
+    }
+
+    // Inject conversation history if needed
+    let initial_history: Vec<rig::message::Message> = match worker_context.history {
+        WorkerHistoryMode::None => Vec::new(),
+        WorkerHistoryMode::Summary => {
+            // TODO: Generate an LLM-based summary of conversation history.
+            tracing::warn!(
+                "WorkerHistoryMode::Summary is not yet implemented, worker will receive no history"
+            );
+            Vec::new()
+        }
+        WorkerHistoryMode::Recent(n) => {
+            let history = state.history.read().await;
+            history
+                .iter()
+                .rev()
+                .take(n as usize)
+                .rev()
+                .cloned()
+                .collect()
+        }
+        WorkerHistoryMode::Full => {
+            let history = state.history.read().await;
+            history.clone()
+        }
+    };
+
+    let worker_model_override = state
+        .model_overrides
+        .resolve_model("worker")
+        .map(String::from);
+
     let worker = if interactive {
         let (worker, input_tx, inject_tx) = Worker::new_interactive(
             Some(state.channel_id.clone()),
@@ -513,6 +609,9 @@ async fn spawn_worker_inner(
             state.screenshot_dir.clone(),
             brave_search_key.clone(),
             state.logs_dir.clone(),
+            initial_history,
+            worker_context.memory,
+            worker_model_override,
         );
         let worker_id = worker.id;
         state
@@ -536,6 +635,9 @@ async fn spawn_worker_inner(
             state.screenshot_dir.clone(),
             brave_search_key,
             state.logs_dir.clone(),
+            initial_history,
+            worker_context.memory,
+            worker_model_override,
         );
         state
             .worker_injections
@@ -1072,6 +1174,9 @@ pub async fn resume_idle_worker_into_state(
                 None => Vec::new(),
             };
             let browser_config = (**rc.browser_config.load()).clone();
+            let routing = rc.routing.load();
+            let model_name = routing.resolve(ProcessType::Worker, None).to_string();
+            let tool_use_enforcement = rc.tool_use_enforcement.load();
             let system_prompt = prompt_engine
                 .render_worker_prompt(
                     &rc.instance_dir.display().to_string(),
@@ -1084,6 +1189,13 @@ pub async fn resume_idle_worker_into_state(
                     browser_config.persist_session,
                     worker_status_text,
                 )
+                .and_then(|prompt| {
+                    prompt_engine.maybe_append_tool_use_enforcement(
+                        prompt,
+                        tool_use_enforcement.as_ref(),
+                        &model_name,
+                    )
+                })
                 .map_err(|error| format!("failed to render worker prompt: {error}"))?;
             let brave_search_key = (**rc.brave_search_key.load()).clone();
 

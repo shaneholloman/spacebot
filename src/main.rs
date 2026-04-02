@@ -183,6 +183,39 @@ struct ActiveChannel {
     _outbound_handle: tokio::task::JoinHandle<()>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ActiveChannelKey {
+    agent_id: String,
+    conversation_id: String,
+}
+
+impl ActiveChannelKey {
+    fn new(agent_id: impl Into<String>, conversation_id: impl Into<String>) -> Self {
+        Self {
+            agent_id: agent_id.into(),
+            conversation_id: conversation_id.into(),
+        }
+    }
+}
+
+/// Maximum number of deferred messages per channel before oldest are dropped.
+const DEFERRED_INJECTION_CAP: usize = 64;
+
+fn queue_deferred_injection(
+    deferred_injections: &mut HashMap<ActiveChannelKey, Vec<spacebot::InboundMessage>>,
+    injection: spacebot::ChannelInjection,
+) {
+    let key = ActiveChannelKey::new(injection.agent_id, injection.conversation_id);
+    let queue = deferred_injections.entry(key).or_default();
+    if queue.len() >= DEFERRED_INJECTION_CAP {
+        tracing::warn!(
+            "deferred injection queue at capacity ({DEFERRED_INJECTION_CAP}), dropping oldest message"
+        );
+        queue.remove(0);
+    }
+    queue.push(injection.message);
+}
+
 #[derive(Debug, serde::Serialize)]
 struct BackfillTranscriptEntry {
     role: String,
@@ -1821,8 +1854,10 @@ async fn run(
         tracing::info!(pid = std::process::id(), "spacebot daemon started");
     }
 
-    // Active conversation channels: conversation_id -> ActiveChannel
-    let mut active_channels: HashMap<String, ActiveChannel> = HashMap::new();
+    // Active conversation channels keyed by their owning agent and conversation.
+    let mut active_channels: HashMap<ActiveChannelKey, ActiveChannel> = HashMap::new();
+    let mut deferred_injections: HashMap<ActiveChannelKey, Vec<spacebot::InboundMessage>> =
+        HashMap::new();
 
     // Resume idle interactive workers that survived the restart.
     // For each idle worker, pre-create the channel if needed and spawn
@@ -1874,7 +1909,10 @@ async fn run(
             for (conversation_id, workers) in by_channel {
                 // Ensure the channel exists. If it's already in active_channels
                 // (unlikely at startup), use its state. Otherwise, pre-create it.
-                if !active_channels.contains_key(&conversation_id) {
+                let channel_key =
+                    ActiveChannelKey::new(agent_id.to_string(), conversation_id.clone());
+                #[allow(clippy::map_entry)] // 250-line block is clearer with contains_key+insert
+                if !active_channels.contains_key(&channel_key) {
                     // First pass: retire any workers whose sessions can't be
                     // reconnected. Only create the channel if at least one
                     // worker has a chance of resuming.
@@ -1919,6 +1957,58 @@ async fn run(
                         .load()
                         .as_ref()
                         .clone();
+
+                    // Load per-conversation settings (idle worker resume).
+                    // Try portal store first, then channel_settings for platform channels.
+                    let resolved_settings = {
+                        let agent_id_str = agent_id.to_string();
+                        let portal_store = spacebot::conversation::PortalConversationStore::new(
+                            agent.deps.sqlite_pool.clone(),
+                        );
+                        let channel_store = spacebot::conversation::ChannelSettingsStore::new(
+                            agent.deps.sqlite_pool.clone(),
+                        );
+                        match portal_store.get(&agent_id_str, &conversation_id).await {
+                            Ok(Some(conv)) => {
+                                spacebot::conversation::settings::ResolvedConversationSettings::resolve(
+                                    conv.settings.as_ref(),
+                                    None,
+                                    None,
+                                )
+                            }
+                            Ok(None) => {
+                                match channel_store.get(&agent_id_str, &conversation_id).await {
+                                    Ok(Some(settings)) => {
+                                        spacebot::conversation::settings::ResolvedConversationSettings::resolve(
+                                            Some(&settings),
+                                            None,
+                                            None,
+                                        )
+                                    }
+                                    Ok(None) => {
+                                        spacebot::conversation::settings::ResolvedConversationSettings::default()
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!(
+                                            %error,
+                                            %conversation_id,
+                                            "idle worker resume: failed to load channel settings, using defaults"
+                                        );
+                                        spacebot::conversation::settings::ResolvedConversationSettings::default()
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    %error,
+                                    %conversation_id,
+                                    "idle worker resume: failed to load portal settings, using defaults"
+                                );
+                                spacebot::conversation::settings::ResolvedConversationSettings::default()
+                            }
+                        }
+                    };
+
                     let (mut channel, channel_tx) = spacebot::agent::channel::Channel::new(
                         channel_id,
                         agent.deps.clone(),
@@ -1928,6 +2018,7 @@ async fn run(
                         agent.config.logs_dir(),
                         snapshot_store,
                         Some(api_state.live_worker_transcripts.clone()),
+                        resolved_settings,
                     );
                     let channel_registration_id = agent
                         .deps
@@ -2054,7 +2145,7 @@ async fn run(
                     });
 
                     active_channels.insert(
-                        conversation_id.clone(),
+                        channel_key,
                         ActiveChannel {
                             message_tx: channel_tx,
                             _outbound_handle: outbound_handle,
@@ -2083,11 +2174,12 @@ async fn run(
         };
         tokio::select! {
             Some(mut message) = inbound_next, if agents_initialized => {
+                let mut binding_settings: Option<spacebot::conversation::ConversationSettings> = None;
                 let agent_id = if let Some(existing) = message.agent_id.as_ref() {
                     existing.clone()
                 } else {
                     let current_bindings = bindings.load();
-                    let Some(resolved) = spacebot::config::resolve_agent_for_message(
+                    let Some((resolved, matched_settings)) = spacebot::config::resolve_agent_for_message(
                         &current_bindings,
                         &message,
                         &default_agent_id,
@@ -2095,14 +2187,16 @@ async fn run(
                         // Message suppressed by require_mention — drop it.
                         continue;
                     };
+                    binding_settings = matched_settings;
                     message.agent_id = Some(resolved.clone());
                     resolved
                 };
 
                 let conversation_id = message.conversation_id.clone();
+                let channel_key = ActiveChannelKey::new(agent_id.to_string(), conversation_id.clone());
 
                 // Find or create a channel for this conversation
-                if !active_channels.contains_key(&conversation_id) {
+                if !active_channels.contains_key(&channel_key) {
                     let Some(agent) = agents.get(&agent_id) else {
                         tracing::warn!(
                             agent_id = %agent_id,
@@ -2127,6 +2221,77 @@ async fn run(
                         .load()
                         .as_ref()
                         .clone();
+
+                    // Load per-conversation settings.
+                    // Resolution: per-channel DB override > binding defaults > agent defaults > system defaults
+                    let resolved_settings = if message.adapter.as_deref() == Some("portal") {
+                        // Portal: load from portal_conversations table.
+                        let store = spacebot::conversation::PortalConversationStore::new(
+                            agent.deps.sqlite_pool.clone(),
+                        );
+                        match store.get(agent_id.as_ref(), &conversation_id).await {
+                            Ok(Some(conv)) => {
+                                spacebot::conversation::settings::ResolvedConversationSettings::resolve(
+                                    conv.settings.as_ref(),
+                                    binding_settings.as_ref(),
+                                    None,
+                                )
+                            }
+                            Ok(None) => {
+                                spacebot::conversation::settings::ResolvedConversationSettings::resolve(
+                                    None,
+                                    binding_settings.as_ref(),
+                                    None,
+                                )
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    %error,
+                                    %conversation_id,
+                                    "failed to load portal conversation settings, falling back to binding defaults"
+                                );
+                                spacebot::conversation::settings::ResolvedConversationSettings::resolve(
+                                    None,
+                                    binding_settings.as_ref(),
+                                    None,
+                                )
+                            }
+                        }
+                    } else {
+                        // Platform channels: load from channel_settings table.
+                        let store = spacebot::conversation::ChannelSettingsStore::new(
+                            agent.deps.sqlite_pool.clone(),
+                        );
+                        match store.get(agent_id.as_ref(), &conversation_id).await {
+                            Ok(Some(settings)) => {
+                                spacebot::conversation::settings::ResolvedConversationSettings::resolve(
+                                    Some(&settings),
+                                    binding_settings.as_ref(),
+                                    None,
+                                )
+                            }
+                            Ok(None) => {
+                                spacebot::conversation::settings::ResolvedConversationSettings::resolve(
+                                    None,
+                                    binding_settings.as_ref(),
+                                    None,
+                                )
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    %error,
+                                    %conversation_id,
+                                    "failed to load channel settings, falling back to binding defaults"
+                                );
+                                spacebot::conversation::settings::ResolvedConversationSettings::resolve(
+                                    None,
+                                    binding_settings.as_ref(),
+                                    None,
+                                )
+                            }
+                        }
+                    };
+
                     let (mut channel, channel_tx) = spacebot::agent::channel::Channel::new(
                         channel_id,
                         agent.deps.clone(),
@@ -2136,6 +2301,7 @@ async fn run(
                         agent.config.logs_dir(),
                         snapshot_store,
                         Some(api_state.live_worker_transcripts.clone()),
+                        resolved_settings,
                     );
                     let channel_registration_id = agent
                         .deps
@@ -2222,7 +2388,7 @@ async fn run(
                         );
                     });
 
-                    active_channels.insert(conversation_id.clone(), ActiveChannel {
+                    active_channels.insert(channel_key.clone(), ActiveChannel {
                         message_tx: channel_tx,
                         _outbound_handle: outbound_handle,
                     });
@@ -2235,7 +2401,41 @@ async fn run(
                 }
 
                 // Forward the message to the channel
-                if let Some(active) = active_channels.get(&conversation_id) {
+                if let Some(message_tx) = active_channels
+                    .get(&channel_key)
+                    .map(|active| active.message_tx.clone())
+                {
+                    let mut pending_delivery_failed = false;
+                    if let Some(pending_injections) = deferred_injections.remove(&channel_key) {
+                        let mut remaining_injections = Vec::new();
+                        let mut pending_injections = pending_injections.into_iter();
+
+                        while let Some(injection_message) = pending_injections.next() {
+                            if let Err(error) = message_tx.send(injection_message).await {
+                                tracing::warn!(
+                                    conversation_id = %conversation_id,
+                                    agent_id = %agent_id,
+                                    "failed to deliver deferred injected message to channel"
+                                );
+                                remaining_injections.push(error.0);
+                                remaining_injections.extend(pending_injections);
+                                // Also re-queue the current inbound message so it isn't lost
+                                remaining_injections.push(message.clone());
+                                deferred_injections
+                                    .entry(channel_key.clone())
+                                    .or_default()
+                                    .extend(remaining_injections);
+                                active_channels.remove(&channel_key);
+                                pending_delivery_failed = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if pending_delivery_failed {
+                        continue;
+                    }
+
                     // Emit inbound message to SSE clients
                     let sender_name = message.formatted_author.clone().or_else(|| {
                         message
@@ -2252,13 +2452,13 @@ async fn run(
                         text: message.content.to_string(),
                     }).ok();
 
-                    if let Err(error) = active.message_tx.send(message).await {
+                    if let Err(error) = message_tx.send(message).await {
                         tracing::error!(
                             conversation_id = %conversation_id,
                             %error,
                             "failed to forward message to channel"
                         );
-                        active_channels.remove(&conversation_id);
+                        active_channels.remove(&channel_key);
                     }
                 }
             }
@@ -2278,14 +2478,24 @@ async fn run(
             // Cross-agent message injection (e.g. delegated task completion retrigger).
             // Forwards the injected message to the target channel if it exists.
             Some(injection) = injection_rx.recv() => {
-                if let Some(active) = active_channels.get(&injection.conversation_id) {
-                    if let Err(error) = active.message_tx.send(injection.message).await {
+                let channel_key = ActiveChannelKey::new(
+                    injection.agent_id.clone(),
+                    injection.conversation_id.clone(),
+                );
+
+                if let Some(message_tx) = active_channels
+                    .get(&channel_key)
+                    .map(|active| active.message_tx.clone())
+                {
+                    if let Err(error) = message_tx.send(injection.message.clone()).await {
                         tracing::warn!(
                             %error,
                             conversation_id = %injection.conversation_id,
                             agent_id = %injection.agent_id,
                             "failed to forward injected message to channel"
                         );
+                        active_channels.remove(&channel_key);
+                        queue_deferred_injection(&mut deferred_injections, injection);
                     } else {
                         tracing::info!(
                             conversation_id = %injection.conversation_id,
@@ -2294,10 +2504,11 @@ async fn run(
                         );
                     }
                 } else {
+                    queue_deferred_injection(&mut deferred_injections, injection);
                     tracing::info!(
-                        conversation_id = %injection.conversation_id,
-                        agent_id = %injection.agent_id,
-                        "injection target channel not active, notification will be delivered on next message"
+                        conversation_id = %channel_key.conversation_id,
+                        agent_id = %channel_key.agent_id,
+                        "injection target channel not active, notification deferred until that exact channel resumes"
                     );
                 }
             }
@@ -2692,13 +2903,7 @@ async fn initialize_agents(
             skills,
         ));
 
-        // Set the settings store in RuntimeConfig and apply config-driven defaults
-        let explicit_listen_only = config
-            .agents
-            .iter()
-            .find(|agent| agent.id == agent_config.id)
-            .and_then(|agent| agent.channel.map(|channel| channel.listen_only_mode));
-        runtime_config.set_settings(settings_store.clone(), explicit_listen_only);
+        runtime_config.set_settings(settings_store.clone());
         runtime_config
             .prompt_snapshots
             .store(Arc::new(prompt_snapshot_store.clone()));
@@ -3353,18 +3558,18 @@ async fn initialize_agents(
         }
     }
 
-    let webchat_agent_pools = agents
+    let portal_agent_pools = agents
         .iter()
         .map(|(agent_id, agent)| (agent_id.to_string(), agent.db.sqlite.clone()))
         .collect();
-    let webchat_adapter = Arc::new(spacebot::messaging::webchat::WebChatAdapter::new(
-        webchat_agent_pools,
+    let portal_adapter = Arc::new(spacebot::messaging::portal::PortalAdapter::new(
+        portal_agent_pools,
     ));
-    webchat_adapter.set_event_tx(api_state.event_tx.clone());
+    portal_adapter.set_event_tx(api_state.event_tx.clone());
     new_messaging_manager
-        .register_shared(webchat_adapter.clone())
+        .register_shared(portal_adapter.clone())
         .await;
-    api_state.set_webchat_adapter(webchat_adapter);
+    api_state.set_portal_adapter(portal_adapter);
 
     *messaging_manager = Arc::new(new_messaging_manager);
     api_state
@@ -3399,6 +3604,7 @@ async fn initialize_agents(
                 active_hours: cron_def.active_hours,
                 enabled: cron_def.enabled,
                 run_once: cron_def.run_once,
+                next_run_at: None,
                 timeout_secs: cron_def.timeout_secs,
             };
             if let Err(error) = store.save(&cron_config).await {
@@ -3574,7 +3780,10 @@ async fn initialize_agents(
 
 #[cfg(test)]
 mod tests {
-    use super::wait_for_startup_warmup_tasks;
+    use super::{ActiveChannelKey, queue_deferred_injection, wait_for_startup_warmup_tasks};
+    use chrono::Utc;
+    use spacebot::{ChannelInjection, InboundMessage, MessageContent};
+    use std::collections::HashMap;
     use std::future::pending;
     use std::sync::Arc;
     use std::time::Duration;
@@ -3635,6 +3844,43 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_millis(80),
             "startup warmup timeout should return without waiting for non-cooperative task"
+        );
+    }
+
+    #[test]
+    fn deferred_injections_are_scoped_to_exact_agent_and_channel() {
+        let mut deferred_injections: HashMap<ActiveChannelKey, Vec<InboundMessage>> =
+            HashMap::new();
+        let injection = ChannelInjection {
+            conversation_id: "discord:dm:42".to_string(),
+            agent_id: "agent-a".to_string(),
+            message: InboundMessage {
+                id: "inj-1".to_string(),
+                source: "system".to_string(),
+                adapter: None,
+                conversation_id: "discord:dm:42".to_string(),
+                sender_id: "system".to_string(),
+                agent_id: Some(Arc::from("agent-a")),
+                content: MessageContent::Text("secret cron output".to_string()),
+                timestamp: Utc::now(),
+                metadata: HashMap::new(),
+                formatted_author: None,
+            },
+        };
+
+        queue_deferred_injection(&mut deferred_injections, injection);
+
+        assert_eq!(
+            deferred_injections
+                .get(&ActiveChannelKey::new("agent-a", "discord:dm:42"))
+                .map(Vec::len),
+            Some(1)
+        );
+        assert!(
+            !deferred_injections.contains_key(&ActiveChannelKey::new("agent-a", "discord:123:456"))
+        );
+        assert!(
+            !deferred_injections.contains_key(&ActiveChannelKey::new("agent-b", "discord:dm:42"))
         );
     }
 }

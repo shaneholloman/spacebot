@@ -93,7 +93,8 @@ import type {
 
 export type { TopologyAgent, TopologyLink, TopologyGroup, TopologyHuman, TopologyResponse };
 
-// Aliases for backward compatibility
+// Conversation-related types
+export type { ConversationSettings, ConversationDefaultsResponse } from "./types";
 export type ChannelInfo = Types.ChannelResponse;
 export type WorkerRunInfo = Types.WorkerListItem;
 export type AssociationItem = Types.Association;
@@ -734,16 +735,25 @@ export interface CronJobWithStats {
 	run_once: boolean;
 	active_hours: [number, number] | null;
 	timeout_secs: number | null;
-	success_count: number;
-	failure_count: number;
+	execution_success_count: number;
+	execution_failure_count: number;
+	delivery_success_count: number;
+	delivery_failure_count: number;
+	delivery_skipped_count: number;
 	last_executed_at: string | null;
 }
 
 export interface CronExecutionEntry {
 	id: string;
+	cron_id: string | null;
 	executed_at: string;
 	success: boolean;
+	execution_succeeded: boolean;
+	delivery_attempted: boolean;
+	delivery_succeeded: boolean | null;
 	result_summary: string | null;
+	execution_error: string | null;
+	delivery_error: string | null;
 }
 
 export interface CronListResponse {
@@ -1583,27 +1593,43 @@ export const api = {
 
 	// Provider management
 	providers: () => fetchJson<Types.ProvidersResponse>("/providers"),
-	updateProvider: async (provider: string, apiKey: string, model: string) => {
+	updateProvider: async (provider: string, apiKey: string, model: string, baseUrl?: string, apiVersion?: string, deployment?: string) => {
 		const response = await fetch(`${getApiBase()}/providers`, {
-			method: "PUT",
+			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ provider, api_key: apiKey, model }),
+			body: JSON.stringify({ provider, api_key: apiKey, model, base_url: baseUrl, api_version: apiVersion, deployment }),
 		});
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<Types.ProviderUpdateResponse>;
 	},
-	testProviderModel: async (provider: string, apiKey: string, model: string) => {
-		const response = await fetch(`${getApiBase()}/providers/test`, {
+	testProviderModel: async (provider: string, apiKey: string, model: string, baseUrl?: string, apiVersion?: string, deployment?: string) => {
+		const response = await fetch(`${getApiBase()}/providers/test-model`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ provider, api_key: apiKey, model }),
+			body: JSON.stringify({ provider, api_key: apiKey, model, base_url: baseUrl, api_version: apiVersion, deployment }),
 		});
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<Types.ProviderModelTestResponse>;
+	},
+	getProviderConfig: async (provider: string, options?: { signal?: AbortSignal }) => {
+		const response = await fetch(`${getApiBase()}/providers/${provider}/config`, {
+			method: "GET",
+			signal: options?.signal,
+		});
+		if (!response.ok) {
+			throw new Error(`API error: ${response.status}`);
+		}
+		return response.json() as Promise<{
+			success: boolean;
+			message: string;
+			base_url?: string | null;
+			api_version?: string | null;
+			deployment?: string | null;
+		}>;
 	},
 	startOpenAiOAuthBrowser: async (params: {model: string}) => {
 		const response = await fetch(`${getApiBase()}/providers/openai/oauth/browser/start`, {
@@ -2013,9 +2039,9 @@ export const api = {
 		}
 	},
 
-	// Web Chat API
-	webChatSend: (agentId: string, sessionId: string, message: string, senderName?: string) =>
-		fetch(`${getApiBase()}/webchat/send`, {
+	// Portal API (renamed from webchat)
+	portalSend: (agentId: string, sessionId: string, message: string, senderName?: string) =>
+		fetch(`${getApiBase()}/portal/send`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -2026,8 +2052,46 @@ export const api = {
 			}),
 		}),
 
-	webChatHistory: (agentId: string, sessionId: string, limit = 100) =>
-		fetch(`${getApiBase()}/webchat/history?agent_id=${encodeURIComponent(agentId)}&session_id=${encodeURIComponent(sessionId)}&limit=${limit}`),
+	portalHistory: (agentId: string, sessionId: string, limit = 100) =>
+		fetch(`${getApiBase()}/portal/history?agent_id=${encodeURIComponent(agentId)}&session_id=${encodeURIComponent(sessionId)}&limit=${limit}`),
+
+	listPortalConversations: (agentId: string, includeArchived = false, limit = 100) =>
+		fetch(`${getApiBase()}/portal/conversations?agent_id=${encodeURIComponent(agentId)}&include_archived=${includeArchived}&limit=${limit}`),
+
+	createPortalConversation: (agentId: string, title?: string, settings?: import("./types").ConversationSettings) =>
+		fetch(`${getApiBase()}/portal/conversations`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ agent_id: agentId, title, settings }),
+		}),
+
+	updatePortalConversation: (agentId: string, sessionId: string, title?: string, archived?: boolean, settings?: import("./types").ConversationSettings) =>
+		fetch(`${getApiBase()}/portal/conversations/${encodeURIComponent(sessionId)}`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ agent_id: agentId, title, archived, settings }),
+		}),
+
+	deletePortalConversation: (agentId: string, sessionId: string) =>
+		fetch(`${getApiBase()}/portal/conversations/${encodeURIComponent(sessionId)}?agent_id=${encodeURIComponent(agentId)}`, {
+			method: "DELETE",
+		}),
+
+	getConversationDefaults: (agentId: string) =>
+		fetchJson<Types.ConversationDefaultsResponse>(`/conversation-defaults?agent_id=${encodeURIComponent(agentId)}`),
+
+	// Channel settings API
+	getChannelSettings: (channelId: string, agentId: string) =>
+		fetchJson<{ conversation_id: string; settings: Types.ConversationSettings }>(
+			`/channels/${encodeURIComponent(channelId)}/settings?agent_id=${encodeURIComponent(agentId)}`
+		),
+
+	updateChannelSettings: (channelId: string, agentId: string, settings: Types.ConversationSettings) =>
+		fetch(`${getApiBase()}/channels/${encodeURIComponent(channelId)}/settings`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ agent_id: agentId, settings }),
+		}),
 
 	// Tasks API
 	listTasks: (params?: { agent_id?: string; owner_agent_id?: string; assigned_agent_id?: string; status?: TaskStatus; priority?: TaskPriority; created_by?: string; limit?: number }) => {
@@ -2266,9 +2330,9 @@ export const api = {
 		return [];
 	},
 
-	webChatSendAudio: async (agentId: string, _sessionId: string, _blob: Blob): Promise<Response> => {
+	portalSendAudio: async (agentId: string, _sessionId: string, _blob: Blob): Promise<Response> => {
 		// TODO: Implement actual audio sending endpoint
-		console.warn("webChatSendAudio not implemented", agentId);
+		console.warn("portalSendAudio not implemented", agentId);
 		return new Response(null, { status: 501 });
 	},
 
