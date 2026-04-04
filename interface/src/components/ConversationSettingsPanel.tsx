@@ -95,16 +95,16 @@ const DELEGATION_DESCRIPTIONS: Record<string, string> = {
 
 const RESPONSE_MODE_OPTIONS = [
 	{ value: "active", label: "Active" },
-	{ value: "quiet", label: "Quiet" },
+	{ value: "observe", label: "Observe" },
 	{ value: "mention_only", label: "Mention Only" },
 ] as const;
 
 const RESPONSE_MODE_DESCRIPTIONS: Record<string, string> = {
 	active: "Responds to all messages normally.",
-	quiet:
-		"Observes and learns from the conversation, but only responds when @mentioned, replied to, or given a command.",
+	observe:
+		"Learns from the conversation passively — never responds, even when mentioned. Use this for channels the agent should monitor without participating.",
 	mention_only:
-		"Only responds when explicitly @mentioned or replied to. No passive memory capture.",
+		"Messages are still visible to the agent for context, but it only responds when explicitly @mentioned, replied to, or given a command. To block messages entirely, use the binding-level require mention setting instead.",
 };
 
 const WORKER_HISTORY_OPTIONS = [

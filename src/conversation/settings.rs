@@ -116,12 +116,21 @@ pub enum ResponseMode {
     /// Respond to all messages normally.
     #[default]
     Active,
-    /// Observe and learn (history + memory persistence) but only respond
-    /// to @mentions, replies-to-bot, and slash commands.
-    Quiet,
-    /// Only respond when explicitly @mentioned or replied to.
-    /// Messages that don't pass the mention check are recorded in history
-    /// but receive no processing (no memory persistence, no LLM).
+    /// Observe only — never respond, even when mentioned or replied to.
+    /// All messages are ingested into in-memory context and conversation
+    /// history, and passive memory capture continues. The agent learns
+    /// from the conversation but never generates a response.
+    #[serde(alias = "quiet")]
+    Observe,
+    /// Only respond when explicitly @mentioned, replied to, or given a command.
+    /// Messages that don't pass the mention check are still ingested into
+    /// the in-memory context window (so the agent stays context-aware),
+    /// recorded in conversation history, and contribute to passive memory
+    /// capture — but do not trigger an LLM turn.
+    ///
+    /// This differs from the binding-level `require_mention` flag, which
+    /// blocks message routing entirely — unmentioned messages never reach
+    /// the channel and are invisible to the agent.
     MentionOnly,
 }
 

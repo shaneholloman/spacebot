@@ -1338,9 +1338,9 @@ export const api = {
 	},
 	channelStatus: () => fetchJson<ChannelStatusResponse>("/channels/status"),
 	inspectPrompt: (channelId: string) =>
-		fetchJson<PromptInspectResponse>(`/channels/inspect?channel_id=${encodeURIComponent(channelId)}`),
+		fetchJson<PromptInspectResponse>(`/channels/prompt/inspect?channel_id=${encodeURIComponent(channelId)}`),
 	setPromptCapture: async (channelId: string, enabled: boolean) => {
-		const response = await fetch(`${getApiBase()}/channels/inspect/capture`, {
+		const response = await fetch(`${getApiBase()}/channels/prompt/capture`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ channel_id: channelId, enabled }),
@@ -1350,11 +1350,11 @@ export const api = {
 	},
 	listPromptSnapshots: (channelId: string, limit = 50) =>
 		fetchJson<PromptSnapshotListResponse>(
-			`/channels/inspect/snapshots?channel_id=${encodeURIComponent(channelId)}&limit=${limit}`,
+			`/channels/prompt/snapshots?channel_id=${encodeURIComponent(channelId)}&limit=${limit}`,
 		),
 	getPromptSnapshot: (channelId: string, timestampMs: number) =>
 		fetchJson<PromptSnapshot>(
-			`/channels/inspect/snapshot?channel_id=${encodeURIComponent(channelId)}&timestamp_ms=${timestampMs}`,
+			`/channels/prompt/snapshots/get?channel_id=${encodeURIComponent(channelId)}&timestamp_ms=${timestampMs}`,
 		),
 	workersList: (agentId: string, params: { limit?: number; offset?: number; status?: string } = {}) => {
 		const search = new URLSearchParams({ agent_id: agentId });
@@ -1580,7 +1580,7 @@ export const api = {
 	},
 
 	cancelProcess: async (channelId: string, processType: "worker" | "branch", processId: string) => {
-		const response = await fetch(`${getApiBase()}/channels/cancel`, {
+		const response = await fetch(`${getApiBase()}/channels/cancel-process`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ channel_id: channelId, process_type: processType, process_id: processId }),
@@ -1632,7 +1632,7 @@ export const api = {
 		}>;
 	},
 	startOpenAiOAuthBrowser: async (params: {model: string}) => {
-		const response = await fetch(`${getApiBase()}/providers/openai/oauth/browser/start`, {
+		const response = await fetch(`${getApiBase()}/providers/openai/browser-oauth/start`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -1646,7 +1646,7 @@ export const api = {
 	},
 	openAiOAuthBrowserStatus: async (state: string) => {
 		const response = await fetch(
-			`${getApiBase()}/providers/openai/oauth/browser/status?state=${encodeURIComponent(state)}`,
+			`${getApiBase()}/providers/openai/browser-oauth/status?state=${encodeURIComponent(state)}`,
 		);
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
@@ -1691,7 +1691,7 @@ export const api = {
 			formData.append("files", file);
 		}
 		const response = await fetch(
-			`${getApiBase()}/agents/ingest/upload?agent_id=${encodeURIComponent(agentId)}`,
+			`${getApiBase()}/agents/ingest/files?agent_id=${encodeURIComponent(agentId)}`,
 			{ method: "POST", body: formData },
 		);
 		if (!response.ok) {
@@ -1825,9 +1825,9 @@ export const api = {
 	},
 
 	// Raw config API
-	rawConfig: () => fetchJson<Types.RawConfigResponse>("/config/raw"),
+	rawConfig: () => fetchJson<Types.RawConfigResponse>("/settings/raw"),
 	updateRawConfig: async (content: string) => {
-		const response = await fetch(`${getApiBase()}/config/raw`, {
+		const response = await fetch(`${getApiBase()}/settings/raw`, {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ content }),
@@ -1845,16 +1845,16 @@ export const api = {
 	},
 
 	// Update API
-	updateCheck: () => fetchJson<UpdateStatus>("/update/check"),
+	updateCheck: () => fetchJson<UpdateStatus>("/update-check"),
 	updateCheckNow: async () => {
-		const response = await fetch(`${getApiBase()}/update/check`, { method: "POST" });
+		const response = await fetch(`${getApiBase()}/update-check`, { method: "POST" });
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
 		return response.json() as Promise<UpdateStatus>;
 	},
 	updateApply: async () => {
-		const response = await fetch(`${getApiBase()}/update/apply`, { method: "POST" });
+		const response = await fetch(`${getApiBase()}/update-apply`, { method: "POST" });
 		if (!response.ok) {
 			throw new Error(`API error: ${response.status}`);
 		}
@@ -1966,9 +1966,9 @@ export const api = {
 	},
 
 	// Agent Groups API
-	groups: () => fetchJson<{ groups: TopologyGroup[] }>("/groups"),
+	groups: () => fetchJson<{ groups: TopologyGroup[] }>("/links/groups"),
 	createGroup: async (request: CreateGroupRequest): Promise<{ group: TopologyGroup }> => {
-		const response = await fetch(`${getApiBase()}/groups`, {
+		const response = await fetch(`${getApiBase()}/links/groups`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(request),
@@ -1980,7 +1980,7 @@ export const api = {
 	},
 	updateGroup: async (name: string, request: UpdateGroupRequest): Promise<{ group: TopologyGroup }> => {
 		const response = await fetch(
-			`${getApiBase()}/groups/${encodeURIComponent(name)}`,
+			`${getApiBase()}/links/groups/${encodeURIComponent(name)}`,
 			{
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
@@ -1994,7 +1994,7 @@ export const api = {
 	},
 	deleteGroup: async (name: string): Promise<void> => {
 		const response = await fetch(
-			`${getApiBase()}/groups/${encodeURIComponent(name)}`,
+			`${getApiBase()}/links/groups/${encodeURIComponent(name)}`,
 			{ method: "DELETE" },
 		);
 		if (!response.ok) {
@@ -2003,9 +2003,9 @@ export const api = {
 	},
 
 	// Humans API
-	humans: () => fetchJson<{ humans: TopologyHuman[] }>("/humans"),
+	humans: () => fetchJson<{ humans: TopologyHuman[] }>("/links/humans"),
 	createHuman: async (request: CreateHumanRequest): Promise<{ human: TopologyHuman }> => {
-		const response = await fetch(`${getApiBase()}/humans`, {
+		const response = await fetch(`${getApiBase()}/links/humans`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(request),
@@ -2017,7 +2017,7 @@ export const api = {
 	},
 	updateHuman: async (id: string, request: UpdateHumanRequest): Promise<{ human: TopologyHuman }> => {
 		const response = await fetch(
-			`${getApiBase()}/humans/${encodeURIComponent(id)}`,
+			`${getApiBase()}/links/humans/${encodeURIComponent(id)}`,
 			{
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
@@ -2031,7 +2031,7 @@ export const api = {
 	},
 	deleteHuman: async (id: string): Promise<void> => {
 		const response = await fetch(
-			`${getApiBase()}/humans/${encodeURIComponent(id)}`,
+			`${getApiBase()}/links/humans/${encodeURIComponent(id)}`,
 			{ method: "DELETE" },
 		);
 		if (!response.ok) {

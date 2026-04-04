@@ -19,7 +19,7 @@ function supportsAdaptiveThinking(modelId: string): boolean {
 		|| id.includes("sonnet-4-6") || id.includes("sonnet-4.6");
 }
 
-type SectionId = "general" | "soul" | "identity" | "role" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "channel" | "sandbox" | "projects";
+type SectionId = "general" | "soul" | "identity" | "role" | "routing" | "tuning" | "compaction" | "cortex" | "coalesce" | "memory" | "browser" | "sandbox" | "projects";
 
 const SECTIONS: {
 	id: SectionId;
@@ -39,7 +39,7 @@ const SECTIONS: {
 	{ id: "coalesce", label: "Coalesce", group: "config", description: "Message batching", detail: "When multiple messages arrive in quick succession, coalescing batches them into a single LLM turn. This prevents the agent from responding to each message individually in fast-moving conversations." },
 	{ id: "memory", label: "Memory Persistence", group: "config", description: "Auto-save interval", detail: "Spawns a silent background branch at regular intervals to recall existing memories and save new ones from the recent conversation. Runs without blocking the channel." },
 	{ id: "browser", label: "Browser", group: "config", description: "Chrome automation", detail: "Controls browser automation tools available to workers. When enabled, workers can navigate web pages, take screenshots, and interact with sites. JavaScript evaluation is a separate permission." },
-	{ id: "channel", label: "Channel Behavior", group: "config", description: "Reply behavior", detail: "Listen-only mode suppresses unsolicited replies in busy channels. The agent still responds to slash commands, @mentions, and replies to its own messages." },
+
 	{ id: "sandbox", label: "Sandbox", group: "config", description: "Process containment", detail: "OS-level filesystem containment for shell tool subprocesses. When enabled, worker processes run inside a kernel-enforced sandbox (bubblewrap on Linux, sandbox-exec on macOS) with an allowlist-only filesystem — only system paths, the workspace, and explicitly configured extra paths are accessible." },
 	{ id: "projects", label: "Projects", group: "config", description: "Workspace management", detail: "Controls how the agent manages project workspaces, git repos, and worktrees. Use worktrees for parallel feature branches, auto-discover to scan for repos on project creation, and set a disk usage warning threshold." },
 ];
@@ -743,7 +743,6 @@ const SANDBOX_DEFAULTS = { mode: "enabled" as const, writable_paths: [] as strin
 function ConfigSectionEditor({ sectionId, label, description, detail, config, onDirtyChange, saveHandlerRef, onSave }: ConfigSectionEditorProps) {
 	type ConfigValues = Record<string, string | number | boolean | string[]>;
 	const sandbox = config.sandbox ?? SANDBOX_DEFAULTS;
-	const channel = config.channel ?? { listen_only_mode: false };
 	const [localValues, setLocalValues] = useState<ConfigValues>(() => {
 		// Initialize from config based on section
 		switch (sectionId) {
@@ -761,9 +760,7 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 				return { ...config.memory_persistence } as ConfigValues;
 			case "browser":
 				return { ...config.browser } as ConfigValues;
-			case "channel":
-				return { ...channel } as ConfigValues;
-			case "sandbox":
+case "sandbox":
 				return { mode: sandbox.mode, writable_paths: sandbox.writable_paths } as ConfigValues;
 			case "projects":
 				return { ...config.projects } as ConfigValues;
@@ -802,9 +799,6 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 					break;
 				case "browser":
 					setLocalValues({ ...config.browser });
-					break;
-				case "channel":
-					setLocalValues({ ...channel });
 					break;
 				case "sandbox":
 					setLocalValues({ mode: sandbox.mode, writable_paths: sandbox.writable_paths });
@@ -848,9 +842,6 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 				break;
 			case "browser":
 				setLocalValues({ ...config.browser });
-				break;
-			case "channel":
-				setLocalValues({ ...channel });
 				break;
 			case "sandbox":
 				setLocalValues({ mode: sandbox.mode, writable_paths: sandbox.writable_paths });
@@ -1219,17 +1210,6 @@ function ConfigSectionEditor({ sectionId, label, description, detail, config, on
 								placeholder="/home/user/projects/myapp"
 							/>
 						</div>
-					</div>
-				);
-			case "channel":
-				return (
-					<div className="grid gap-4">
-						<ConfigToggleField
-							label="Listen-Only Mode"
-							description="Only respond when explicitly invoked (slash command, @mention, or reply-to-bot)."
-							value={localValues.listen_only_mode as boolean}
-							onChange={(v) => handleChange("listen_only_mode", v)}
-						/>
 					</div>
 				);
 			case "projects":
