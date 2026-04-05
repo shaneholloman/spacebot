@@ -18,6 +18,7 @@ pub mod llm;
 pub mod mcp;
 pub mod memory;
 pub mod messaging;
+pub mod notifications;
 pub mod openai_auth;
 pub mod opencode;
 pub mod projects;

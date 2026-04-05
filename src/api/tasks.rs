@@ -1,4 +1,5 @@
 use super::state::ApiState;
+use crate::notifications::{NewNotification, NotificationKind, NotificationSeverity};
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -154,6 +155,24 @@ fn emit_task_event(state: &ApiState, task: &crate::tasks::Task, action: &str) {
         .ok();
 }
 
+/// Emit a task_approval notification when a task enters the pending_approval state.
+fn maybe_emit_approval_notification(state: &ApiState, task: &crate::tasks::Task) {
+    if task.status != crate::tasks::TaskStatus::PendingApproval {
+        return;
+    }
+    state.emit_notification(NewNotification {
+        kind: NotificationKind::TaskApproval,
+        severity: NotificationSeverity::Info,
+        title: format!("Approval needed: {}", task.title),
+        body: task.description.clone(),
+        agent_id: Some(task.assigned_agent_id.clone()),
+        related_entity_type: Some("task".to_string()),
+        related_entity_id: Some(task.task_number.to_string()),
+        action_url: Some(format!("/tasks/{}", task.task_number)),
+        metadata: None,
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -276,6 +295,7 @@ pub(super) async fn create_task(
         })?;
 
     emit_task_event(&state, &task, "created");
+    maybe_emit_approval_notification(&state, &task);
     Ok(Json(TaskResponse { task }))
 }
 
@@ -330,6 +350,7 @@ pub(super) async fn update_task(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     emit_task_event(&state, &task, "updated");
+    maybe_emit_approval_notification(&state, &task);
     Ok(Json(TaskResponse { task }))
 }
 

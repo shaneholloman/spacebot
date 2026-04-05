@@ -13,6 +13,9 @@ use crate::mcp::McpManager;
 use crate::memory::{EmbeddingModel, MemorySearch};
 use crate::messaging::MessagingManager;
 use crate::messaging::portal::PortalAdapter;
+use crate::notifications::{
+    NewNotification, Notification, NotificationKind, NotificationSeverity, NotificationStore,
+};
 use crate::projects::ProjectStore;
 use crate::prompts::PromptEngine;
 use crate::tasks::TaskStore;
@@ -86,6 +89,8 @@ pub struct ApiState {
     pub task_store: ArcSwap<Option<Arc<TaskStore>>>,
     /// Instance-level shared project store.
     pub project_store: ArcSwap<Option<Arc<ProjectStore>>>,
+    /// Instance-level notification store for the dashboard inbox.
+    pub notification_store: ArcSwap<Option<Arc<NotificationStore>>>,
     /// Per-agent RuntimeConfig for reading live hot-reloaded configuration.
     pub runtime_configs: ArcSwap<HashMap<String, Arc<RuntimeConfig>>>,
     /// Per-agent MCP managers for status and reconnect APIs.
@@ -279,6 +284,10 @@ pub enum ApiEvent {
         content: String,
         tool_calls: Option<Vec<crate::agent::cortex_chat::CortexChatToolCall>>,
     },
+    /// A new notification was created and persisted.
+    NotificationCreated { notification: Notification },
+    /// A notification was updated (read or dismissed) — for cross-tab sync.
+    NotificationUpdated { id: String, read: bool, dismissed: bool },
 }
 
 impl ApiState {
@@ -308,6 +317,7 @@ impl ApiState {
             cron_schedulers: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             task_store: ArcSwap::from_pointee(None),
             project_store: ArcSwap::from_pointee(None),
+            notification_store: ArcSwap::from_pointee(None),
             runtime_configs: ArcSwap::from_pointee(HashMap::new()),
             mcp_managers: ArcSwap::from_pointee(HashMap::new()),
             sandboxes: ArcSwap::from_pointee(HashMap::new()),
@@ -382,6 +392,9 @@ impl ApiState {
     ) {
         let api_tx = self.event_tx.clone();
         let live_transcripts = self.live_worker_transcripts.clone();
+        // Snapshot the notification store at registration time. It is set once
+        // at startup before any agents register, so the snapshot is always valid.
+        let notif_store_snap = self.notification_store.load_full();
         tokio::spawn(async move {
             loop {
                 match agent_event_rx.recv().await {
@@ -474,6 +487,48 @@ impl ApiState {
                                         success: *success,
                                     })
                                     .ok();
+                                if !success {
+                                    if let Some(ref store) = *notif_store_snap {
+                                        let store = store.clone();
+                                        let event_tx = api_tx.clone();
+                                        let agent_id_n = agent_id.clone();
+                                        let worker_id_n = worker_id.to_string();
+                                        let body = if result.is_empty() {
+                                            None
+                                        } else {
+                                            Some(result.chars().take(300).collect::<String>())
+                                        };
+                                        tokio::spawn(async move {
+                                            let n = NewNotification {
+                                                kind: NotificationKind::WorkerFailed,
+                                                severity: NotificationSeverity::Error,
+                                                title: format!("Worker failed: {worker_id_n}"),
+                                                body,
+                                                agent_id: Some(agent_id_n),
+                                                related_entity_type: Some("worker".to_string()),
+                                                related_entity_id: Some(worker_id_n),
+                                                action_url: None,
+                                                metadata: None,
+                                            };
+                                            match store.insert(n).await {
+                                                Ok(Some(notification)) => {
+                                                    event_tx
+                                                        .send(ApiEvent::NotificationCreated {
+                                                            notification,
+                                                        })
+                                                        .ok();
+                                                }
+                                                Ok(None) => {}
+                                                Err(error) => {
+                                                    tracing::warn!(
+                                                        %error,
+                                                        "failed to insert worker failure notification"
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
                             }
                             ProcessEvent::BranchResult {
                                 branch_id,
@@ -752,6 +807,30 @@ impl ApiState {
     /// Set the shared project store.
     pub fn set_project_store(&self, store: Arc<ProjectStore>) {
         self.project_store.store(Arc::new(Some(store)));
+    }
+
+    /// Set the instance-level notification store.
+    pub fn set_notification_store(&self, store: Arc<NotificationStore>) {
+        self.notification_store.store(Arc::new(Some(store)));
+    }
+
+    /// Insert a notification and broadcast `NotificationCreated` via SSE.
+    /// Fire-and-forget: spawns a task and returns immediately.
+    pub fn emit_notification(&self, n: NewNotification) {
+        let store = self.notification_store.load().as_ref().clone();
+        let event_tx = self.event_tx.clone();
+        let Some(store) = store else { return };
+        tokio::spawn(async move {
+            match store.insert(n).await {
+                Ok(Some(notification)) => {
+                    event_tx
+                        .send(ApiEvent::NotificationCreated { notification })
+                        .ok();
+                }
+                Ok(None) => {} // duplicate suppressed by unique index
+                Err(error) => tracing::warn!(%error, "failed to insert notification"),
+            }
+        });
     }
 
     /// Set the runtime configs for all agents.

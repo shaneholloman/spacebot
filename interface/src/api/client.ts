@@ -990,6 +990,47 @@ export interface UpdateTaskRequest {
 	approved_by?: string;
 }
 
+// -- Notification Types --
+
+export type NotificationKind = "task_approval" | "worker_failed" | "cortex_observation";
+export type NotificationSeverity = "info" | "warn" | "error";
+
+export interface NotificationItem {
+	id: string;
+	kind: NotificationKind;
+	severity: NotificationSeverity;
+	title: string;
+	body?: string;
+	agent_id?: string;
+	related_entity_type?: string;
+	related_entity_id?: string;
+	action_url?: string;
+	metadata?: string;
+	created_at: string;
+	read_at?: string;
+	dismissed_at?: string;
+}
+
+export interface NotificationsResponse {
+	notifications: NotificationItem[];
+}
+
+export interface UnreadCountResponse {
+	count: number;
+}
+
+export interface NotificationCreatedEvent {
+	type: "notification_created";
+	notification: NotificationItem;
+}
+
+export interface NotificationUpdatedEvent {
+	type: "notification_updated";
+	id: string;
+	read: boolean;
+	dismissed: boolean;
+}
+
 // -- Messaging / Bindings Types --
 
 export interface BindingInfo {
@@ -2336,6 +2377,57 @@ export const api = {
 		// TODO: Implement actual audio sending endpoint
 		console.warn("portalSendAudio not implemented", agentId);
 		return new Response(null, { status: 501 });
+	},
+
+	// -- Notifications --
+
+	listNotifications: async (params?: {
+		filter?: "unread" | "all";
+		agent_id?: string;
+		kind?: NotificationKind;
+		limit?: number;
+		offset?: number;
+	}): Promise<NotificationsResponse> => {
+		const query = new URLSearchParams();
+		if (params?.filter) query.set("filter", params.filter);
+		if (params?.agent_id) query.set("agent_id", params.agent_id);
+		if (params?.kind) query.set("kind", params.kind);
+		if (params?.limit !== undefined) query.set("limit", String(params.limit));
+		if (params?.offset !== undefined) query.set("offset", String(params.offset));
+		const qs = query.toString();
+		const response = await fetch(`${getApiBase()}/notifications${qs ? `?${qs}` : ""}`);
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<NotificationsResponse>;
+	},
+
+	getUnreadCount: async (): Promise<UnreadCountResponse> => {
+		const response = await fetch(`${getApiBase()}/notifications/unread_count`);
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+		return response.json() as Promise<UnreadCountResponse>;
+	},
+
+	markNotificationRead: async (id: string): Promise<void> => {
+		const response = await fetch(`${getApiBase()}/notifications/${encodeURIComponent(id)}/read`, {
+			method: "POST",
+		});
+		if (!response.ok && response.status !== 404) throw new Error(`API error: ${response.status}`);
+	},
+
+	dismissNotification: async (id: string): Promise<void> => {
+		const response = await fetch(`${getApiBase()}/notifications/${encodeURIComponent(id)}/dismiss`, {
+			method: "POST",
+		});
+		if (!response.ok && response.status !== 404) throw new Error(`API error: ${response.status}`);
+	},
+
+	markAllNotificationsRead: async (): Promise<void> => {
+		const response = await fetch(`${getApiBase()}/notifications/read_all`, { method: "POST" });
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
+	},
+
+	dismissReadNotifications: async (): Promise<void> => {
+		const response = await fetch(`${getApiBase()}/notifications/dismiss_read`, { method: "POST" });
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
 	},
 
 	getEventsUrl: () => `${getApiBase()}/events`,

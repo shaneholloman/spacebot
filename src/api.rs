@@ -17,6 +17,7 @@ mod mcp;
 mod memories;
 mod messaging;
 mod models;
+mod notifications;
 mod opencode_proxy;
 mod portal;
 mod projects;

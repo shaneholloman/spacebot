@@ -1628,6 +1628,10 @@ async fn run(
 
     let global_task_store = Arc::new(spacebot::tasks::TaskStore::new(instance_pool.clone()));
 
+    // Instance-level notification store for the dashboard inbox.
+    let global_notification_store =
+        Arc::new(spacebot::notifications::NotificationStore::new(instance_pool.clone()));
+
     // Instance-level shared project store. Replaces per-agent project stores.
     let global_project_store = Arc::new(spacebot::projects::ProjectStore::new(instance_pool.clone()));
 
@@ -1645,6 +1649,7 @@ async fn run(
     );
     api_state.auth_token = config.api.auth_token.clone();
     api_state.set_task_store(global_task_store.clone());
+    api_state.set_notification_store(global_notification_store.clone());
     let api_state = Arc::new(api_state);
 
     // Keep the secrets API available in setup mode so encrypted stores can be
@@ -1812,6 +1817,7 @@ async fn run(
             injection_tx.clone(),
             global_task_store.clone(),
             global_project_store.clone(),
+            global_notification_store.clone(),
             &bootstrapped_store,
         )
         .await?;
@@ -2587,6 +2593,7 @@ async fn run(
                                     injection_tx.clone(),
                                     global_task_store.clone(),
                                     global_project_store.clone(),
+                                    global_notification_store.clone(),
                                     &bootstrapped_store,
                                 ).await {
                                     Ok(()) => {
@@ -2731,6 +2738,7 @@ async fn initialize_agents(
     injection_tx: tokio::sync::mpsc::Sender<spacebot::ChannelInjection>,
     global_task_store: Arc<spacebot::tasks::TaskStore>,
     global_project_store: Arc<spacebot::projects::ProjectStore>,
+    global_notification_store: Arc<spacebot::notifications::NotificationStore>,
     bootstrapped_store: &Option<Arc<spacebot::secrets::store::SecretsStore>>,
 ) -> anyhow::Result<()> {
     let resolved_agents = config.resolve_agents();
@@ -3700,7 +3708,11 @@ async fn initialize_agents(
 
     // Start cortex warmup, runtime, and association loops for each agent
     for (agent_id, agent) in agents.iter() {
-        let cortex_logger = spacebot::agent::cortex::CortexLogger::new(agent.db.sqlite.clone());
+        let cortex_logger =
+            spacebot::agent::cortex::CortexLogger::new(agent.db.sqlite.clone()).with_notifications(
+                global_notification_store.clone(),
+                agent_id.to_string(),
+            );
         let warmup_handle =
             spacebot::agent::cortex::spawn_warmup_loop(agent.deps.clone(), cortex_logger.clone());
         cortex_handles.push(warmup_handle);
@@ -3718,7 +3730,8 @@ async fn initialize_agents(
 
         let ready_task_handle = spacebot::agent::cortex::spawn_ready_task_loop(
             agent.deps.clone(),
-            spacebot::agent::cortex::CortexLogger::new(agent.db.sqlite.clone()),
+            spacebot::agent::cortex::CortexLogger::new(agent.db.sqlite.clone())
+                .with_notifications(global_notification_store.clone(), agent_id.to_string()),
         );
         cortex_handles.push(ready_task_handle);
         tracing::info!(agent_id = %agent_id, "cortex ready-task loop started");

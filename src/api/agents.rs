@@ -474,6 +474,7 @@ pub(super) async fn trigger_warmup(
         let agent_id = agent_id.clone();
         let injection_tx = state.injection_tx.clone();
         let humans = (**state.agent_humans.load()).clone();
+        let notif_store_warmup = state.notification_store.load().as_ref().clone();
         tokio::spawn(async move {
             let (event_tx, memory_event_tx) = crate::create_process_event_buses();
             let working_memory_tz = runtime_config
@@ -508,7 +509,10 @@ pub(super) async fn trigger_warmup(
                 injection_tx,
                 working_memory,
             };
-            let logger = CortexLogger::new(sqlite_pool);
+            let mut logger = CortexLogger::new(sqlite_pool);
+            if let Some(store) = notif_store_warmup {
+                logger = logger.with_notifications(store, agent_id.clone());
+            }
             crate::agent::cortex::run_warmup_once(&deps, &logger, "api_trigger", force).await;
         });
     }
@@ -993,14 +997,22 @@ pub async fn create_agent_internal(
     )
     .with_factory(true);
 
-    let cortex_logger = crate::agent::cortex::CortexLogger::new(db.sqlite.clone());
+    let notif_store_for_cortex = state.notification_store.load().as_ref().clone();
+    let make_cortex_logger = |pool: sqlx::SqlitePool| {
+        let mut logger = crate::agent::cortex::CortexLogger::new(pool);
+        if let Some(ref store) = notif_store_for_cortex {
+            logger = logger.with_notifications(store.clone(), agent_id.to_string());
+        }
+        logger
+    };
+    let cortex_logger = make_cortex_logger(db.sqlite.clone());
     let _warmup_loop = crate::agent::cortex::spawn_warmup_loop(deps.clone(), cortex_logger.clone());
     let _cortex_loop = crate::agent::cortex::spawn_cortex_loop(deps.clone(), cortex_logger.clone());
     let _association_loop =
         crate::agent::cortex::spawn_association_loop(deps.clone(), cortex_logger);
     crate::agent::cortex::spawn_ready_task_loop(
         deps.clone(),
-        crate::agent::cortex::CortexLogger::new(db.sqlite.clone()),
+        make_cortex_logger(db.sqlite.clone()),
     );
 
     let ingestion_config = **runtime_config.ingestion.load();

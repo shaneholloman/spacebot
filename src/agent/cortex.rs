@@ -774,17 +774,53 @@ pub struct CortexEvent {
 #[derive(Debug, Clone)]
 pub struct CortexLogger {
     pool: SqlitePool,
+    /// Optional notification store for emitting dashboard inbox entries.
+    notification_store: Option<std::sync::Arc<crate::notifications::NotificationStore>>,
+    /// Agent id, recorded in notifications for filtering.
+    agent_id: Option<String>,
 }
+
+/// Cortex event types that warrant a dashboard notification.
+const NOTIFY_EVENT_TYPES: &[&str] = &["circuit_breaker_tripped", "worker_killed"];
 
 impl CortexLogger {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            notification_store: None,
+            agent_id: None,
+        }
+    }
+
+    /// Attach a notification store so high-signal events surface in the inbox.
+    pub fn with_notifications(
+        mut self,
+        store: std::sync::Arc<crate::notifications::NotificationStore>,
+        agent_id: String,
+    ) -> Self {
+        self.notification_store = Some(store);
+        self.agent_id = Some(agent_id);
+        self
     }
 
     /// Log a cortex action. Fire-and-forget.
     pub fn log(&self, event_type: &str, summary: &str, details: Option<serde_json::Value>) {
         let pool = self.pool.clone();
         let id = uuid::Uuid::new_v4().to_string();
+
+        // Capture data for potential notification before taking ownership.
+        let should_notify = self.notification_store.is_some()
+            && NOTIFY_EVENT_TYPES.contains(&event_type);
+        let notif_data = should_notify.then(|| {
+            (
+                self.notification_store.clone().unwrap(),
+                self.agent_id.clone(),
+                summary.to_string(),
+                details.clone(),
+                id.clone(),
+            )
+        });
+
         let event_type = event_type.to_string();
         let summary = summary.to_string();
         let details_json = details.map(|d| d.to_string());
@@ -803,6 +839,25 @@ impl CortexLogger {
                 tracing::warn!(%error, "failed to persist cortex event");
             }
         });
+
+        if let Some((store, agent_id, title, details, entity_id)) = notif_data {
+            tokio::spawn(async move {
+                let n = crate::notifications::NewNotification {
+                    kind: crate::notifications::NotificationKind::CortexObservation,
+                    severity: crate::notifications::NotificationSeverity::Warn,
+                    title,
+                    body: details.as_ref().map(|d| d.to_string()),
+                    agent_id,
+                    related_entity_type: Some("cortex_event".to_string()),
+                    related_entity_id: Some(entity_id),
+                    action_url: None,
+                    metadata: None,
+                };
+                if let Err(error) = store.insert(n).await {
+                    tracing::warn!(%error, "failed to insert cortex observation notification");
+                }
+            });
+        }
     }
 
     /// Load cortex events with optional type filter, newest first.

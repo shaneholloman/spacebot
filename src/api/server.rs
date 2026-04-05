@@ -3,8 +3,8 @@
 use super::state::ApiState;
 use super::{
     agents, bindings, channels, config, cortex, cron, factory, ingest, links, mcp, memories,
-    messaging, models, opencode_proxy, portal, projects, providers, secrets, settings, skills, ssh,
-    system, tasks, tools, workers,
+    messaging, models, notifications, opencode_proxy, portal, projects, providers, secrets,
+    settings, skills, ssh, system, tasks, tools, workers,
 };
 
 use axum::Json;
@@ -124,6 +124,15 @@ pub fn api_router() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(cron::cron_executions))
         .routes(routes!(cron::trigger_cron))
         .routes(routes!(cron::toggle_cron))
+        // Notification routes
+        .routes(routes!(
+            notifications::list_notifications,
+            notifications::unread_count
+        ))
+        .routes(routes!(notifications::mark_read))
+        .routes(routes!(notifications::dismiss_notification))
+        .routes(routes!(notifications::mark_all_read))
+        .routes(routes!(notifications::dismiss_read))
         // Task routes
         .routes(routes!(tasks::list_tasks, tasks::create_task))
         .routes(routes!(

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CheckSquare, Brain, Robot, ArrowsClockwise, Circle } from "@phosphor-icons/react";
+import { CheckSquare, Brain, Robot, Circle } from "@phosphor-icons/react";
+import { Card, CardHeader, CardContent, FilterButton } from "@spacedrive/primitives";
 import { api, type TaskItem } from "@/api/client";
 
 type FilterType = "all" | "tasks" | "cortex" | "workers";
@@ -53,31 +54,15 @@ const DUMMY_CORTEX_AND_WORKERS: ActivityItem[] = [
 
 const TYPE_CONFIG: Record<
 	ActivityItem["type"],
-	{ icon: React.ElementType; iconClass: string; label: string }
+	{ icon: React.ElementType; iconClass: string }
 > = {
-	task_created: {
-		icon: Circle,
-		iconClass: "text-blue-400",
-		label: "Task",
-	},
-	task_completed: {
-		icon: CheckSquare,
-		iconClass: "text-green-400",
-		label: "Task",
-	},
-	cortex: {
-		icon: Brain,
-		iconClass: "text-violet-400",
-		label: "Cortex",
-	},
-	worker_done: {
-		icon: Robot,
-		iconClass: "text-amber-400",
-		label: "Worker",
-	},
+	task_created: { icon: Circle, iconClass: "text-blue-400" },
+	task_completed: { icon: CheckSquare, iconClass: "text-status-success" },
+	cortex: { icon: Brain, iconClass: "text-violet-400" },
+	worker_done: { icon: Robot, iconClass: "text-amber-400" },
 };
 
-const FILTER_LABELS: { key: FilterType; label: string }[] = [
+const FILTERS: { key: FilterType; label: string }[] = [
 	{ key: "all", label: "All" },
 	{ key: "tasks", label: "Tasks" },
 	{ key: "cortex", label: "Cortex" },
@@ -103,10 +88,7 @@ export function RecentActivityCard() {
 			timeAgo: formatTimeAgo(t.created_at),
 		}));
 
-	const allItems: ActivityItem[] = [
-		...taskItems,
-		...DUMMY_CORTEX_AND_WORKERS,
-	];
+	const allItems: ActivityItem[] = [...taskItems, ...DUMMY_CORTEX_AND_WORKERS];
 
 	const filtered = allItems.filter((item) => {
 		if (filter === "all") return true;
@@ -117,59 +99,52 @@ export function RecentActivityCard() {
 	});
 
 	return (
-		<div className="rounded-xl bg-app-dark-box p-5">
-			<div className="mb-4 flex items-center justify-between">
-				<div className="flex items-center gap-2">
-					<h2 className="font-plex text-sm font-medium text-ink-dull">Recent Activity</h2>
-					<ArrowsClockwise className="h-3.5 w-3.5 text-ink-faint" />
-				</div>
+		<Card>
+			<CardHeader className="flex-row items-center justify-between p-4 pb-3">
+				<h2 className="font-plex text-sm font-medium text-ink-dull">Recent Activity</h2>
 				<div className="flex items-center gap-1">
-					{FILTER_LABELS.map(({ key, label }) => (
-						<button
+					{FILTERS.map(({ key, label }) => (
+						<FilterButton
 							key={key}
+							label={label}
+							active={filter === key}
 							onClick={() => setFilter(key)}
-							className={`rounded-md px-2.5 py-1 text-tiny transition-colors ${
-								filter === key
-									? "bg-accent/10 text-accent"
-									: "text-ink-faint hover:text-ink-dull"
-							}`}
-						>
-							{label}
-						</button>
+						/>
 					))}
 				</div>
-			</div>
+			</CardHeader>
 
-			{filtered.length === 0 ? (
-				<div className="py-8 text-center">
-					<p className="text-sm text-ink-faint">No activity yet</p>
-				</div>
-			) : (
-				<div className="flex flex-col divide-y divide-app-line/40">
-					{filtered.map((item) => {
-						const config = TYPE_CONFIG[item.type];
-						const Icon = config.icon;
-						return (
-							<div
-								key={item.id}
-								className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0"
-							>
-								<Icon className={`h-4 w-4 shrink-0 ${config.iconClass}`} />
-								<div className="min-w-0 flex-1">
-									<p className="truncate text-sm text-ink-dull">{item.title}</p>
-									{item.agent && (
-										<p className="text-tiny text-ink-faint">{item.agent}</p>
-									)}
+			<CardContent className="px-4 pb-4 pt-0">
+				{filtered.length === 0 ? (
+					<div className="py-6 text-center">
+						<p className="text-sm text-ink-faint">No activity yet</p>
+					</div>
+				) : (
+					<div className="flex flex-col divide-y divide-app-line/40">
+						{filtered.map((item) => {
+							const { icon: Icon, iconClass } = TYPE_CONFIG[item.type];
+							return (
+								<div
+									key={item.id}
+									className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0"
+								>
+									<Icon className={`h-4 w-4 shrink-0 ${iconClass}`} />
+									<div className="min-w-0 flex-1">
+										<p className="truncate text-sm text-ink-dull">{item.title}</p>
+										{item.agent && (
+											<p className="text-tiny text-ink-faint">{item.agent}</p>
+										)}
+									</div>
+									<span className="shrink-0 text-tiny tabular-nums text-ink-faint">
+										{item.timeAgo}
+									</span>
 								</div>
-								<span className="shrink-0 text-tiny tabular-nums text-ink-faint">
-									{item.timeAgo}
-								</span>
-							</div>
-						);
-					})}
-				</div>
-			)}
-		</div>
+							);
+						})}
+					</div>
+				)}
+			</CardContent>
+		</Card>
 	);
 }
 
