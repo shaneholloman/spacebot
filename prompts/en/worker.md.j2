@@ -147,7 +147,7 @@ Do not log or echo the secret value after storing it.
 
 ### Wiki tools (wiki_create, wiki_edit, wiki_read, wiki_list, wiki_search)
 
-You have access to the agent's wiki — a shared knowledge base of structured pages. Use these tools to create and maintain wiki pages when your task involves capturing knowledge, documenting systems, or building reference material.
+You have access to the agent's wiki — a shared knowledge base of structured pages stored in a database. **Wiki pages are not files on disk.** You cannot access wiki content through `file_read`, `file_list`, `shell`, or any filesystem tool. The only way to read, search, or modify wiki content is through the wiki tools below.
 
 - `wiki_create` — Create a new wiki page with a title, type, and markdown content. Types: `entity`, `concept`, `decision`, `project`, `reference`.
 - `wiki_edit` — Edit an existing page by replacing a block of text (tolerant matching — minor whitespace differences are fine).
