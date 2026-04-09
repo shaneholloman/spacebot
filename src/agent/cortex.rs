@@ -3437,14 +3437,31 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
             deps.wiki_store.is_some(),
             project_context,
         )
-        .and_then(|prompt| {
-            prompt_engine.maybe_append_tool_use_enforcement(
-                prompt,
-                tool_use_enforcement.as_ref(),
-                &model_name,
-            )
-        })
         .map_err(|error| anyhow::anyhow!("failed to render worker prompt: {error}"))?;
+
+    // Append skills listing so task workers can discover and read_skill relevant
+    // skills (e.g. wiki-writing). No suggested skills — the worker decides based
+    // on the task description.
+    let skills = deps.runtime_config.skills.load();
+    let worker_system_prompt = match skills.render_worker_skills(&[], &prompt_engine) {
+        Ok(skills_prompt) if !skills_prompt.is_empty() => {
+            format!("{worker_system_prompt}\n\n{skills_prompt}")
+        }
+        Ok(_) => worker_system_prompt,
+        Err(error) => {
+            tracing::warn!(%error, "failed to render worker skills listing for task pickup");
+            worker_system_prompt
+        }
+    };
+
+    // Tool-use enforcement must be the last instruction appended.
+    let worker_system_prompt = prompt_engine
+        .maybe_append_tool_use_enforcement(
+            worker_system_prompt,
+            tool_use_enforcement.as_ref(),
+            &model_name,
+        )
+        .map_err(|error| anyhow::anyhow!("failed to append tool-use enforcement: {error}"))?;
 
     let mut task_prompt = format!("Execute task #{}: {}", task.task_number, task.title);
     if let Some(description) = &task.description {
