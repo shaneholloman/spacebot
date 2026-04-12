@@ -36,6 +36,9 @@ pub enum TranscriptStep {
         call_id: String,
         name: String,
         text: String,
+        /// Accumulated streaming output for live display. Cleared when tool completes.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        live_output: Option<String>,
     },
 }
 
@@ -181,6 +184,7 @@ pub fn convert_opencode_messages(messages: &[serde_json::Value]) -> (Vec<Transcr
                                 call_id,
                                 name: tool_name.to_string(),
                                 text: truncated,
+                                live_output: None,
                             });
                         }
                         "error" => {
@@ -192,6 +196,7 @@ pub fn convert_opencode_messages(messages: &[serde_json::Value]) -> (Vec<Transcr
                                 call_id,
                                 name: tool_name.to_string(),
                                 text: format!("Error: {error_text}"),
+                                live_output: None,
                             });
                         }
                         _ => {}
@@ -292,6 +297,7 @@ pub fn convert_opencode_parts(
                             call_id: id.clone(),
                             name: tool.clone(),
                             text: truncated,
+                            live_output: None,
                         });
                     }
                     OpenCodeToolState::Error { error } => {
@@ -300,6 +306,7 @@ pub fn convert_opencode_parts(
                             call_id: id.clone(),
                             name: tool.clone(),
                             text: format!("Error: {error_text}"),
+                            live_output: None,
                         });
                     }
                     _ => {}
@@ -379,6 +386,7 @@ pub fn transcript_to_history(steps: &[TranscriptStep]) -> Vec<rig::message::Mess
                 call_id,
                 name: _,
                 text,
+                live_output: _,
             } => {
                 let result = ToolResult {
                     id: call_id.clone(),
@@ -460,6 +468,7 @@ fn convert_history(history: &[rig::message::Message]) -> Vec<TranscriptStep> {
                                 call_id,
                                 name: String::new(),
                                 text: truncated,
+                                live_output: None,
                             });
                         }
                         rig::message::UserContent::Text(text) => {

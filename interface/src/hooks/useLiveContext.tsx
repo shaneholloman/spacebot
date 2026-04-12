@@ -1,6 +1,12 @@
 import { createContext, useContext, useCallback, useEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type AgentMessageEvent, type ChannelInfo, type ToolStartedEvent, type ToolCompletedEvent, type TranscriptStep, type OpenCodePart, type OpenCodePartUpdatedEvent, type WorkerTextEvent } from "@/api/client";
+import { api, type AgentMessageEvent, type ChannelInfo, type ToolStartedEvent, type ToolCompletedEvent, type ToolOutputEvent, type OpenCodePart, type OpenCodePartUpdatedEvent, type WorkerTextEvent } from "@/api/client";
+import type { TranscriptStep as SchemaTranscriptStep } from "@/api/types";
+
+/** Extended TranscriptStep with live_output for streaming shell output */
+type TranscriptStep = SchemaTranscriptStep & {
+	live_output?: string;
+};
 import { generateId } from "@/lib/id";
 import { useEventSource, type ConnectionState } from "@/hooks/useEventSource";
 import { useChannelLiveState, type ChannelLiveState, type ActiveWorker } from "@/hooks/useChannelLiveState";
@@ -230,6 +236,44 @@ export function LiveContextProvider({ children, onBootstrapped }: { children: Re
 		}
 	}, [channelHandlers, bumpWorkerVersion]);
 
+	const handleToolOutput = useCallback((data: unknown) => {
+		const event = data as ToolOutputEvent;
+		if (event.process_type === "worker") {
+			setLiveTranscripts((prev) => {
+				const steps = prev[event.process_id] ?? [];
+				// Use the stable call_id from the event to find or create the result step
+				const existingIndex = steps.findIndex(
+					(s) => s.type === "tool_result" && s.call_id === event.call_id
+				);
+				if (existingIndex >= 0) {
+					// Append to existing result step with buffer size limit
+					const step = steps[existingIndex];
+					const existingOutput = (step as TranscriptStep).live_output ?? "";
+					const combined = existingOutput + event.line;
+					// Cap at ~50KB to prevent unbounded growth during long-running commands
+					const MAX_LIVE_OUTPUT_SIZE = 50000;
+					const newOutput = combined.length > MAX_LIVE_OUTPUT_SIZE
+						? combined.slice(-MAX_LIVE_OUTPUT_SIZE)
+						: combined;
+					const updatedStep = { ...step, live_output: newOutput };
+					const newSteps = [...steps];
+					newSteps[existingIndex] = updatedStep;
+					return { ...prev, [event.process_id]: newSteps };
+				}
+				// Create new result step with the event's call_id
+				const step: TranscriptStep = {
+					type: "tool_result",
+					call_id: event.call_id,
+					name: event.tool_name,
+					text: "",
+					live_output: event.line,
+				};
+				return { ...prev, [event.process_id]: [...steps, step] };
+			});
+			bumpWorkerVersion();
+		}
+	}, [bumpWorkerVersion]);
+
 	// Handle OpenCode part updates — upsert parts into the per-worker ordered map
 	const handleOpenCodePartUpdated = useCallback((data: unknown) => {
 		const event = data as OpenCodePartUpdatedEvent;
@@ -280,6 +324,7 @@ export function LiveContextProvider({ children, onBootstrapped }: { children: Re
 			worker_completed: wrappedWorkerCompleted,
 			tool_started: wrappedToolStarted,
 			tool_completed: wrappedToolCompleted,
+			tool_output: handleToolOutput,
 			opencode_part_updated: handleOpenCodePartUpdated,
 			worker_text: handleWorkerText,
 			agent_message_sent: handleAgentMessage,
@@ -289,7 +334,7 @@ export function LiveContextProvider({ children, onBootstrapped }: { children: Re
 			notification_created: handleNotificationCreated,
 			notification_updated: handleNotificationUpdated,
 		}),
-		[channelHandlers, wrappedWorkerStarted, wrappedWorkerStatus, wrappedWorkerIdle, wrappedWorkerCompleted, wrappedToolStarted, wrappedToolCompleted, handleOpenCodePartUpdated, handleWorkerText, handleAgentMessage, bumpTaskVersion, handleCortexChatMessage, handleNotificationCreated, handleNotificationUpdated],
+		[channelHandlers, wrappedWorkerStarted, wrappedWorkerStatus, wrappedWorkerIdle, wrappedWorkerCompleted, wrappedToolStarted, wrappedToolCompleted, handleToolOutput, handleOpenCodePartUpdated, handleWorkerText, handleAgentMessage, bumpTaskVersion, handleCortexChatMessage, handleNotificationCreated, handleNotificationUpdated],
 	);
 
 	const onReconnect = useCallback(() => {

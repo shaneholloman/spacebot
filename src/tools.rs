@@ -192,7 +192,7 @@ use crate::conversation::settings::WorkerMemoryMode;
 use crate::memory::MemorySearch;
 use crate::sandbox::Sandbox;
 use crate::tasks::TaskStore;
-use crate::{AgentId, ChannelId, ProcessEvent, RoutedSender, WorkerId};
+use crate::{AgentId, ChannelId, ProcessEvent, ProcessId, RoutedSender, WorkerId};
 use rig::tool::Tool as _;
 use rig::tool::server::{ToolServer, ToolServerHandle};
 use std::path::PathBuf;
@@ -865,6 +865,7 @@ pub fn create_worker_tool_server(
     channel_id: Option<ChannelId>,
     task_store: Arc<TaskStore>,
     event_tx: broadcast::Sender<ProcessEvent>,
+    tool_output_tx: broadcast::Sender<ProcessEvent>,
     browser_config: BrowserConfig,
     screenshot_dir: PathBuf,
     brave_search_key: Option<String>,
@@ -878,7 +879,15 @@ pub fn create_worker_tool_server(
     wiki_store: Option<Arc<crate::wiki::WikiStore>>,
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
-        .tool(ShellTool::new(workspace.clone(), sandbox.clone()))
+        .tool(
+            ShellTool::new(workspace.clone(), sandbox.clone()).with_streaming(
+                tool_output_tx,
+                ProcessId::Worker(worker_id),
+                channel_id.clone(),
+                agent_id.clone(),
+                format!("shell_{}", uuid::Uuid::new_v4()),
+            ),
+        )
         .tool(TaskUpdateTool::for_worker(
             task_store,
             agent_id.clone(),

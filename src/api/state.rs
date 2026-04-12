@@ -309,6 +309,19 @@ pub enum ApiEvent {
         read: bool,
         dismissed: bool,
     },
+    /// A line of live output from a running tool (e.g. shell stdout/stderr).
+    /// Ephemeral — for frontend live display only. The full output is in ToolCompleted.
+    ToolOutput {
+        agent_id: String,
+        channel_id: Option<String>,
+        process_type: String,
+        process_id: String,
+        /// Stable identifier matching the tool_call that initiated this stream.
+        call_id: String,
+        tool_name: String,
+        line: String,
+        stream: String,
+    },
 }
 
 impl ApiState {
@@ -637,6 +650,7 @@ impl ApiState {
                                         call_id: String::new(),
                                         name: tool_name.clone(),
                                         text: result.clone(),
+                                        live_output: None,
                                     };
                                     let mut guard = live_transcripts.write().await;
                                     if let Some(steps) = guard.get_mut(&worker_id.to_string()) {
@@ -799,6 +813,97 @@ impl ApiState {
                             crate::BroadcastRecvResult::Event(_) => unreachable!(
                                 "classifying an Err recv result should never produce Event"
                             ),
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Register an agent's tool output stream. Spawns a task that forwards
+    /// ToolOutput ProcessEvents into the aggregated API event stream and
+    /// accumulates streaming output into the live transcript cache so it's
+    /// available on refresh.
+    pub fn register_tool_output_stream(
+        &self,
+        agent_id: String,
+        mut tool_output_rx: broadcast::Receiver<ProcessEvent>,
+    ) {
+        let api_tx = self.event_tx.clone();
+        let live_transcripts = self.live_worker_transcripts.clone();
+        tokio::spawn(async move {
+            loop {
+                match tool_output_rx.recv().await {
+                    Ok(event) => {
+                        if let ProcessEvent::ToolOutput {
+                            process_id,
+                            channel_id,
+                            call_id,
+                            tool_name,
+                            line,
+                            stream,
+                            ..
+                        } = &event
+                        {
+                            let (process_type, id_str) = process_id_info(process_id);
+                            // Accumulate streaming output into live transcript for workers.
+                            if let ProcessId::Worker(worker_id) = process_id {
+                                let mut guard = live_transcripts.write().await;
+                                if let Some(steps) = guard.get_mut(&worker_id.to_string()) {
+                                    // Find existing ToolResult for this call_id or create new one.
+                                    let pos = steps.iter().position(|s| {
+                                        matches!(s, TranscriptStep::ToolResult { call_id: cid, .. } if cid == call_id)
+                                    });
+                                    if let Some(idx) = pos {
+                                        // Append to existing live_output.
+                                        if let TranscriptStep::ToolResult { live_output, .. } =
+                                            &mut steps[idx]
+                                        {
+                                            if let Some(lo) = live_output {
+                                                lo.push_str(line);
+                                                lo.push('\n');
+                                            } else {
+                                                *live_output = Some(format!("{}\n", line));
+                                            }
+                                        }
+                                    } else {
+                                        // Create new streaming result step.
+                                        steps.push(TranscriptStep::ToolResult {
+                                            call_id: call_id.clone(),
+                                            name: tool_name.clone(),
+                                            text: String::new(),
+                                            live_output: Some(format!("{}\n", line)),
+                                        });
+                                    }
+                                }
+                            }
+                            api_tx
+                                .send(ApiEvent::ToolOutput {
+                                    agent_id: agent_id.clone(),
+                                    channel_id: channel_id.as_deref().map(|s| s.to_string()),
+                                    process_type,
+                                    process_id: id_str,
+                                    call_id: call_id.clone(),
+                                    tool_name: tool_name.clone(),
+                                    line: line.clone(),
+                                    stream: stream.clone(),
+                                })
+                                .ok();
+                        }
+                    }
+                    Err(error) => {
+                        match crate::classify_broadcast_recv_result::<crate::ProcessEvent>(Err(
+                            error,
+                        )) {
+                            crate::BroadcastRecvResult::Lagged(count) => {
+                                tracing::trace!(
+                                    agent_id = %agent_id,
+                                    count,
+                                    "tool output stream lagged, dropped lines"
+                                );
+                            }
+                            crate::BroadcastRecvResult::Closed => break,
+                            crate::BroadcastRecvResult::Event(_) => unreachable!(),
                         }
                     }
                 }

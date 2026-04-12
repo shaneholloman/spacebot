@@ -1,6 +1,15 @@
 import {useState} from "react";
 import {cx} from "class-variance-authority";
-import type {TranscriptStep, OpenCodePart} from "@/api/client";
+import type {OpenCodePart} from "@/api/client";
+import type { TranscriptStep as SchemaTranscriptStep } from "@/api/types";
+
+// Extended TranscriptStep with live_output for streaming shell output
+type ExtendedTranscriptStep = SchemaTranscriptStep & {
+	live_output?: string;
+};
+
+// Use the extended type for pairing
+type TranscriptStep = ExtendedTranscriptStep;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,6 +34,8 @@ export interface ToolCallPair {
 	status: ToolCallStatus;
 	/** Human-readable summary provided by live opencode parts */
 	title?: string | null;
+	/** Live streaming output from tool_output SSE events (running tools only) */
+	liveOutput?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -42,12 +53,13 @@ export type TranscriptItem =
 
 export function pairTranscriptSteps(steps: TranscriptStep[]): TranscriptItem[] {
 	const items: TranscriptItem[] = [];
-	const resultsById = new Map<string, {name: string; text: string}>();
+	const resultsById = new Map<string, {name: string; text: string; liveOutput?: string}>();
 
 	// First pass: index all tool_result steps by call_id
 	for (const step of steps) {
 		if (step.type === "tool_result") {
-			resultsById.set(step.call_id, {name: step.name, text: step.text});
+			const liveOutput = step.live_output;
+			resultsById.set(step.call_id, {name: step.name, text: step.text, liveOutput});
 		}
 	}
 
@@ -77,6 +89,7 @@ export function pairTranscriptSteps(steps: TranscriptStep[]): TranscriptItem[] {
 							resultRaw: result?.text ?? null,
 							result: parsedResult,
 							status: result ? (isError ? "error" : "completed") : "running",
+							liveOutput: result?.liveOutput,
 						},
 					});
 				}
@@ -1118,6 +1131,15 @@ function renderResult(
 	renderer: ToolRenderer,
 ): React.ReactNode {
 	if (pair.status === "running") {
+		if (pair.liveOutput) {
+			return (
+				<div className="px-3 py-2">
+					<pre className="max-h-60 overflow-auto whitespace-pre-wrap font-mono text-tiny text-ink-dull">
+						{pair.liveOutput}
+					</pre>
+				</div>
+			);
+		}
 		return (
 			<div className="flex items-center gap-2 px-3 py-2 text-tiny text-ink-faint">
 				<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />

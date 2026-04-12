@@ -998,6 +998,12 @@ impl Cortex {
             } => {
                 state.track_worker_activity(*worker_id);
             }
+            ProcessEvent::ToolOutput {
+                process_id: ProcessId::Worker(worker_id),
+                ..
+            } => {
+                state.track_worker_activity(*worker_id);
+            }
             ProcessEvent::ToolCompleted {
                 process_id,
                 tool_name,
@@ -1411,7 +1417,8 @@ fn signal_from_event(event: ProcessEvent) -> Option<Signal> {
         | ProcessEvent::WorkerInitialResult { .. }
         | ProcessEvent::WorkerText { .. }
         | ProcessEvent::CortexChatUpdate { .. }
-        | ProcessEvent::SettingsUpdated { .. } => return None,
+        | ProcessEvent::SettingsUpdated { .. }
+        | ProcessEvent::ToolOutput { .. } => return None,
     })
 }
 

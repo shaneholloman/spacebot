@@ -343,6 +343,7 @@ impl Worker {
             self.channel_id.clone(),
             self.deps.task_store.clone(),
             self.deps.event_tx.clone(),
+            self.deps.tool_output_tx.clone(),
             self.browser_config.clone(),
             self.screenshot_dir.clone(),
             self.brave_search_key.clone(),

@@ -87,7 +87,8 @@ async fn bootstrap_deps() -> anyhow::Result<(spacebot::AgentDeps, spacebot::conf
         skills,
     ));
 
-    let (event_tx, memory_event_tx) = spacebot::create_process_event_buses_with_capacity(16, 32);
+    let (event_tx, memory_event_tx, tool_output_tx) =
+        spacebot::create_process_event_buses_with_capacity(16, 32, 1024);
 
     let agent_id: spacebot::AgentId = Arc::from(agent_config.id.as_str());
     let mcp_manager = Arc::new(spacebot::mcp::McpManager::new(agent_config.mcp.clone()));
@@ -116,6 +117,7 @@ async fn bootstrap_deps() -> anyhow::Result<(spacebot::AgentDeps, spacebot::conf
         runtime_config,
         event_tx,
         memory_event_tx,
+        tool_output_tx,
         sqlite_pool: db.sqlite.clone(),
         messaging_manager: None,
         sandbox,
@@ -407,6 +409,7 @@ async fn dump_worker_context() {
         None,
         deps.task_store.clone(),
         deps.event_tx.clone(),
+        deps.tool_output_tx.clone(),
         browser_config,
         std::path::PathBuf::from("/tmp/screenshots"),
         brave_search_key,
@@ -602,6 +605,7 @@ async fn dump_all_contexts() {
         None,
         deps.task_store.clone(),
         deps.event_tx.clone(),
+        deps.tool_output_tx.clone(),
         browser_config,
         std::path::PathBuf::from("/tmp/screenshots"),
         brave_search_key,
