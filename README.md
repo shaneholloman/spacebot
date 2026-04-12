@@ -36,7 +36,7 @@
 > **One-click deploy with [spacebot.sh](https://spacebot.sh)** — connect your Discord, Slack, Telegram, or Twitch, configure your agent, and go. No self-hosting required.
 
 <p align="center">
-  <img src=".github/spacebot-ui.jpg" alt="Spacebot UI" />
+  <img src=".github/spacebot-ui.webp" alt="Spacebot UI" />
 </p>
 
 ---
@@ -278,7 +278,7 @@ spacebot status               # show pid and uptime
 spacebot auth login           # authenticate via Anthropic OAuth
 ```
 
-The binary creates all databases and directories automatically on first run. See the [quickstart guide](docs/content/docs/(getting-started)/quickstart.mdx) for more detail.
+The binary creates all databases and directories automatically on first run. See the [quickstart guide](<docs/content/docs/(getting-started)/quickstart.mdx>) for more detail.
 
 ### Authentication
 
@@ -310,7 +310,7 @@ OAuth tokens are stored in `anthropic_oauth.json` and auto-refresh before each A
 
 | Layer           | Technology                                                                                                      |
 | --------------- | --------------------------------------------------------------------------------------------------------------- |
-| Language        | **Rust** (edition 2024) — single binary, no runtime dependencies, no GC pauses                                 |
+| Language        | **Rust** (edition 2024) — single binary, no runtime dependencies, no GC pauses                                  |
 | Async runtime   | **Tokio**                                                                                                       |
 | LLM framework   | **[Rig](https://github.com/0xPlaygrounds/rig)** v0.31 — agentic loop, tool execution, hooks                     |
 | Relational data | **SQLite** (sqlx) — conversations, memory graph, tasks, goals, cron jobs                                        |
@@ -331,20 +331,20 @@ Single binary, no server dependencies. All data lives in embedded databases in a
 
 ## Documentation
 
-| Doc                                    | Description                                              |
-| -------------------------------------- | -------------------------------------------------------- |
-| [Quick Start](docs/content/docs/(getting-started)/quickstart.mdx) | Setup, config, first run                    |
-| [Config Reference](docs/content/docs/(configuration)/config.mdx) | Full `config.toml` reference                |
-| [Architecture](ARCHITECTURE.md)        | Process types, tool access, memory internals, multi-agent |
-| [Memory](docs/content/docs/(core)/memory.mdx)                    | Memory system design                        |
-| [Tools](docs/content/docs/(features)/tools.mdx)                  | All available LLM tools                     |
-| [Routing](docs/content/docs/(core)/routing.mdx)                  | Model routing and fallback chains           |
-| [Secrets](docs/content/docs/(configuration)/secrets.mdx)         | Credential storage, encryption, output scrubbing |
-| [Sandbox](docs/content/docs/(configuration)/sandbox.mdx)         | Process containment and environment sanitization |
-| [Cron Jobs](docs/content/docs/(features)/cron.mdx)               | Scheduled recurring tasks                   |
-| [MCP](docs/content/docs/(features)/mcp.mdx)                      | External tool servers via Model Context Protocol |
-| [OpenCode](docs/content/docs/(features)/opencode.mdx)            | OpenCode as a worker backend                |
-| [Messaging](docs/content/docs/(messaging)/messaging.mdx)         | Adapter architecture and platform setup     |
+| Doc                                                                 | Description                                               |
+| ------------------------------------------------------------------- | --------------------------------------------------------- |
+| [Quick Start](<docs/content/docs/(getting-started)/quickstart.mdx>) | Setup, config, first run                                  |
+| [Config Reference](<docs/content/docs/(configuration)/config.mdx>)  | Full `config.toml` reference                              |
+| [Architecture](ARCHITECTURE.md)                                     | Process types, tool access, memory internals, multi-agent |
+| [Memory](<docs/content/docs/(core)/memory.mdx>)                     | Memory system design                                      |
+| [Tools](<docs/content/docs/(features)/tools.mdx>)                   | All available LLM tools                                   |
+| [Routing](<docs/content/docs/(core)/routing.mdx>)                   | Model routing and fallback chains                         |
+| [Secrets](<docs/content/docs/(configuration)/secrets.mdx>)          | Credential storage, encryption, output scrubbing          |
+| [Sandbox](<docs/content/docs/(configuration)/sandbox.mdx>)          | Process containment and environment sanitization          |
+| [Cron Jobs](<docs/content/docs/(features)/cron.mdx>)                | Scheduled recurring tasks                                 |
+| [MCP](<docs/content/docs/(features)/mcp.mdx>)                       | External tool servers via Model Context Protocol          |
+| [OpenCode](<docs/content/docs/(features)/opencode.mdx>)             | OpenCode as a worker backend                              |
+| [Messaging](<docs/content/docs/(messaging)/messaging.mdx>)          | Adapter architecture and platform setup                   |
 
 ---
 
